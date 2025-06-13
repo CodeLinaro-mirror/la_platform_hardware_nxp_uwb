@@ -21,4 +21,5 @@ cc_library_static {
         "hardware/nxp/uwb/halimpl/tml",
         "hardware/nxp/uwb/halimpl/utils",
     ],
+    vendor_available: true,
 }
