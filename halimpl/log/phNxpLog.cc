@@ -24,15 +24,6 @@
 #include "phNxpLog.h"
 #include "phNxpConfig.h"
 
-// TODO: use constexpr and move to header
-const char* NXPLOG_ITEM_EXTNS = "NxpExtns";
-const char* NXPLOG_ITEM_UCIHAL = "NxpUwbHal";
-const char* NXPLOG_ITEM_UCIX = "NxpUciX";
-const char* NXPLOG_ITEM_UCIR = "NxpUciR";
-const char* NXPLOG_ITEM_FWDNLD = "NxpFwDnld";
-const char* NXPLOG_ITEM_TML = "NxpUwbTml";
-const char *NXP_HAL_ERROR = "NxpHalE";
-
 /* global log level structure */
 uci_log_level_t gLog_level;
 uci_debug_log_file_t gLogFile;

@@ -27,11 +27,21 @@
 #include <string>
 #include <string_view>
 
+#include <android/log.h>
+
 #include "phNxpConfig.h"
 #include "phNxpLog.h"
 #include "phNxpUciHal_hbci_fwd.h"
 #include <phNxpUciHal_utils.h>
 #include <phTmlUwb_spi.h>
+
+#ifndef ALOGD
+#define ALOGD(...) __android_log_print(ANDROID_LOG_DEBUG, NXPLOG_ITEM_FWDNLD, __VA_ARGS__)
+#endif
+
+#ifndef ALOGE
+#define ALOGE(...) __android_log_print(ANDROID_LOG_ERROR, NXPLOG_ITEM_FWDNLD, __VA_ARGS__)
+#endif
 
 using namespace std;
 #define FILEPATH_MAXLEN 500

@@ -16,9 +16,6 @@
  *  limitations under the License.
  *
  ******************************************************************************/
-//#define LOG_NDEBUG 0
-#define LOG_TAG "NxpUwbConf"
-
 #include <filesystem>
 #include <limits.h>
 #include <sys/stat.h>
@@ -40,15 +37,34 @@
 #include <unordered_set>
 #include <vector>
 
-#include <android-base/logging.h>
+#include <android/log.h>
 #include <cutils/properties.h>
-#include <log/log.h>
 
 #include "phNxpConfig.h"
 #include "phNxpUciHal.h"
 #include "phNxpUciHal_ext.h"
 #include "phNxpUciHal_utils.h"
 #include "phNxpLog.h"
+
+#ifndef ALOGV
+#define ALOGV(...) __android_log_print(ANDROID_LOG_VERBOSE, "NxpUwbConf", __VA_ARGS__)
+#endif
+
+#ifndef ALOGD
+#define ALOGD(...) __android_log_print(ANDROID_LOG_DEBUG, "NxpUwbConf", __VA_ARGS__)
+#endif
+
+#ifndef ALOGI
+#define ALOGI(...) __android_log_print(ANDROID_LOG_INFO, "NxpUwbConf", __VA_ARGS__)
+#endif
+
+#ifndef ALOGW
+#define ALOGW(...) __android_log_print(ANDROID_LOG_WARN, "NxpUwbConf", __VA_ARGS__)
+#endif
+
+#ifndef ALOGE
+#define ALOGE(...) __android_log_print(ANDROID_LOG_ERROR, "NxpUwbConf", __VA_ARGS__)
+#endif
 
 namespace {
 
