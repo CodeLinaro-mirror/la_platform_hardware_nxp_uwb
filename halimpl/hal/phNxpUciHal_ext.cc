@@ -63,7 +63,7 @@ static void phNxpUciHal_hw_reset_ntf_timeout_cb(uint32_t timerId,
 tHAL_UWB_STATUS phNxpUciHal_process_ext_cmd_rsp(size_t cmd_len,
                                                 const uint8_t *p_cmd) {
   if (cmd_len > UCI_MAX_DATA_LEN) {
-    NXPLOG_UCIHAL_E("Packet size is too big to send: %u.", cmd_len);
+    NXPLOG_UCIHAL_E("Packet size is too big to send: %zu.", cmd_len);
     return UWBSTATUS_FAILED;
   }
   if (cmd_len < 1) {
@@ -879,7 +879,7 @@ bool phNxpUciHal_handle_set_app_config(size_t *data_len, uint8_t *p_data)
   uint8_t uciCmd[UCI_MAX_DATA_LEN];
   size_t packet_len = *data_len;
   if (sizeof(uciCmd) < packet_len) {
-    NXPLOG_UCIHAL_E("SESSION_SET_APP_CONFIG_CMD packet size %u is too big to handle, skip patching.", packet_len);
+    NXPLOG_UCIHAL_E("SESSION_SET_APP_CONFIG_CMD packet size %zu is too big to handle, skip patching.", packet_len);
     return false;
   }
   // 9 = Header 4 + SessionID 4 + NumOfConfigs 1

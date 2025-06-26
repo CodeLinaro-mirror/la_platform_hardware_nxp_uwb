@@ -179,7 +179,7 @@ bool phNxpUciHal_handle_dev_error_ntf(size_t packet_len,
       return true;
     }
   } else {
-    NXPLOG_UCIHAL_E("[%s] Invalid packet length: %d", __func__, packet_len);
+    NXPLOG_UCIHAL_E("[%s] Invalid packet length: %zu", __func__, packet_len);
   }
   return false;
 }
@@ -611,7 +611,7 @@ void phNxpUciHal_read_complete(void* pContext, phTmlUwb_ReadTransactInfo* pInfo)
     return;
   }
 
-  NXPLOG_UCIHAL_V("read successful status = 0x%x , total len = 0x%x",
+  NXPLOG_UCIHAL_V("read successful status = 0x%x , total len = 0x%zx",
                   pInfo->wStatus, pInfo->wLength);
 
   for (int32_t index = 0; index < pInfo->wLength; )
@@ -624,7 +624,7 @@ void phNxpUciHal_read_complete(void* pContext, phTmlUwb_ReadTransactInfo* pInfo)
     length += UCI_MSG_HDR_SIZE;
 
     if ((index + length) > pInfo->wLength) {
-      NXPLOG_UCIHAL_E("RX Packet misaligned! given length=%u, offset=%d, len=%d",
+      NXPLOG_UCIHAL_E("RX Packet misaligned! given length=%zu, offset=%d, len=%d",
         pInfo->wLength, index, length);
       return;
     }
