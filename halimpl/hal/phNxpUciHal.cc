@@ -377,6 +377,13 @@ tHAL_UWB_STATUS phNxpUciHal_open(uwb_stack_callback_t* p_cback, uwb_stack_data_c
   nxpucihal_ctrl.client_thread =
     std::thread{ &phNxpUciHal_client_thread, &nxpucihal_ctrl };
 
+  // Initiates TML.
+  tHAL_UWB_STATUS status = phTmlUwb_Init(uwb_dev_node, nxpucihal_ctrl.pClientMq);
+  if (status != UWBSTATUS_SUCCESS) {
+    NXPLOG_UCIHAL_E("phTmlUwb_Init Failed");
+    return status;
+  }
+
   nxpucihal_ctrl.halStatus = HAL_STATUS_OPEN;
 
   CONCURRENCY_UNLOCK();
@@ -395,6 +402,8 @@ tHAL_UWB_STATUS phNxpUciHal_open(uwb_stack_callback_t* p_cback, uwb_stack_data_c
   phNxpUciHal_rx_handler_add(UCI_MT_NTF, UCI_GID_CORE,
                              UCI_MSG_CORE_DEVICE_STATUS_NTF, false,
                              phNxpUciHal_handle_dev_error_ntf);
+
+  SessionTrack_init();
 
   /* Call open complete */
   nxpucihal_ctrl.pClientMq->send(std::make_shared<phLibUwb_Message>(UCI_HAL_OPEN_CPLT_MSG));
@@ -658,6 +667,8 @@ tHAL_UWB_STATUS phNxpUciHal_close() {
   nxpucihal_ctrl.pClientMq->send(std::make_shared<phLibUwb_Message>(UCI_HAL_CLOSE_CPLT_MSG));
   nxpucihal_ctrl.client_thread.join();
 
+  phTmlUwb_Shutdown();
+
   nxpucihal_ctrl.halStatus = HAL_STATUS_CLOSE;
 
   CONCURRENCY_UNLOCK();
@@ -910,13 +921,6 @@ tHAL_UWB_STATUS phNxpUciHal_hw_init()
   }
   nxpucihal_ctrl.uwb_device_initialized = false;
 
-  // Initiates TML.
-  status = phTmlUwb_Init(uwb_dev_node, nxpucihal_ctrl.pClientMq);
-  if (status != UWBSTATUS_SUCCESS) {
-    NXPLOG_UCIHAL_E("phTmlUwb_Init Failed");
-    return status;
-  }
-
   // Device Status Notification
   UciHalSemaphore devStatusNtfWait;
   uint8_t dev_status = UWB_DEVICE_ERROR;
@@ -1004,7 +1008,6 @@ tHAL_UWB_STATUS phNxpUciHal_hw_init()
 
 void phNxpUciHal_hw_deinit()
 {
-  phTmlUwb_Shutdown();
 }
 
 void phNxpUciHal_hw_suspend()
@@ -1032,8 +1035,6 @@ tHAL_UWB_STATUS phNxpUciHal_coreInitialization()
     nxpucihal_ctrl.pClientMq->send(std::make_shared<phLibUwb_Message>(UCI_HAL_ERROR_MSG));
     return status;
   }
-
-  SessionTrack_init();
 
   // report to upper-layer
   nxpucihal_ctrl.pClientMq->send(std::make_shared<phLibUwb_Message>(UCI_HAL_INIT_CPLT_MSG));
