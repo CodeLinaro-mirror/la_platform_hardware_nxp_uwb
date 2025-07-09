@@ -951,19 +951,19 @@ tHAL_UWB_STATUS phNxpUciHal_hw_init()
   devStatusNtfWait.wait_timeout_msec(3000);
   if(dev_status != UWB_DEVICE_INIT && dev_status != UWB_DEVICE_READY) {
     NXPLOG_UCIHAL_E("First Device Status NTF was not received or it's invalid state. 0x%x", dev_status);
-    return UWBSTATUS_FAILED;
+    goto failed_hw_init;
   }
 
   // Set board-config and wait for Device Status Notification
   status = phNxpUciHal_set_board_config();
   if (status != UWBSTATUS_SUCCESS) {
     NXPLOG_UCIHAL_E("%s: Set Board Config Failed", __func__);
-    return status;
+    goto failed_hw_init;
   }
   devStatusNtfWait.wait_timeout_msec(3000);
   if (dev_status != UWB_DEVICE_READY) {
     NXPLOG_UCIHAL_E("Cannot receive UWB_DEVICE_READY");
-    return UWBSTATUS_FAILED;
+    goto failed_hw_init;
   }
 
   // Send SW reset and wait for Device Status Notification
@@ -971,12 +971,12 @@ tHAL_UWB_STATUS phNxpUciHal_hw_init()
   status = phNxpUciHal_uwb_reset();
   if (status != UWBSTATUS_SUCCESS) {
     NXPLOG_UCIHAL_E("%s: device reset Failed", __func__);
-    return status;
+    goto failed_hw_init;
   }
   devStatusNtfWait.wait_timeout_msec(3000);
   if(dev_status != UWB_DEVICE_READY) {
     NXPLOG_UCIHAL_E("UWB_DEVICE_READY not received uwbc_device_state = %x", dev_status);
-    return UWBSTATUS_FAILED;
+    goto failed_hw_init;
   }
 
   // Cache CORE_GET_DEVICE_INFO
@@ -984,13 +984,13 @@ tHAL_UWB_STATUS phNxpUciHal_hw_init()
 
   status = nxpucihal_ctrl.uwb_chip->core_init();
   if (status != UWBSTATUS_SUCCESS) {
-    return status;
+    goto failed_hw_init;
   }
 
   status = phNxpUciHal_applyVendorConfig();
   if (status != UWBSTATUS_SUCCESS) {
     NXPLOG_UCIHAL_E("%s: Apply vendor Config Failed", __func__);
-    return status;
+    goto failed_hw_init;
   }
   phNxpUciHal_extcal_handle_coreinit();
   nxpucihal_ctrl.uwb_device_initialized = true;
@@ -1000,10 +1000,14 @@ tHAL_UWB_STATUS phNxpUciHal_hw_init()
 
   status = nxpucihal_ctrl.uwb_chip->core_init_post();
   if (status != UWBSTATUS_SUCCESS) {
-    return status;
+    goto failed_hw_init;
   }
 
   return UWBSTATUS_SUCCESS;
+
+failed_hw_init:
+  phTmlUwb_StopRead();
+  return UWBSTATUS_FAILED;
 }
 
 void phNxpUciHal_hw_deinit()
