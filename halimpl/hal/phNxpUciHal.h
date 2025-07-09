@@ -239,6 +239,12 @@ private:
   uint8_t oid_;
 };
 
+// List of SW workarounds
+enum class Quirks {
+  // Very rarely, SESSION_DEINIT_RSP with REJECTED status code.
+  kSessionDeinitRejected = 0,
+};
+
 /* UCI Control structure */
 typedef struct phNxpUciHal_Control {
   phNxpUci_HalStatus halStatus; /* Indicate if hal is open or closed */
@@ -285,6 +291,13 @@ typedef struct phNxpUciHal_Control {
   // Current country code
   uint8_t country_code[2];
   uint8_t isLastDataMsgSnd;
+
+  // Quirk mask for SW workarounds.
+  uint32_t quirk_mask;
+
+  bool HasQuirk(Quirks quirk) {
+    return quirk_mask & (1 << static_cast<int>(quirk));
+  }
 } phNxpUciHal_Control_t;
 
 // RX packet handler

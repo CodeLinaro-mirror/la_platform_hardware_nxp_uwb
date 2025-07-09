@@ -317,6 +317,10 @@ static bool phNxpUciHal_hook_cmd(size_t cmdlen, const uint8_t* cmd)
   } else if (gid == UCI_GID_SESSION_CONTROL && oid == UCI_MSG_SESSION_START) {
     SessionTrack_onSessionStart(cmdlen, cmd);
     return false;
+  } else if (gid == UCI_GID_SESSION_CONTROL && oid == UCI_MSG_SESSION_STOP) {
+    SessionTrack_onSessionStop(cmdlen, cmd);
+  } else if (gid == UCI_GID_SESSION_MANAGE && oid == UCI_MSG_SESSION_DEINIT) {
+    SessionTrack_onSessionDeinit(cmdlen, cmd);
   } else if (gid == UCI_GID_ANDROID && oid == UCI_MSG_ANDROID_TIMESTAMP_ANCHOR_TO_UWBS) {
     TimeSync_onConvertTimestamp(cmdlen, cmd);
     return true;
@@ -390,6 +394,10 @@ tHAL_UWB_STATUS phNxpUciHal_open(uwb_stack_callback_t* p_cback, uwb_stack_data_c
   }
 
   nxpucihal_ctrl.halStatus = HAL_STATUS_OPEN;
+
+  // Loads quirk mask from configuration file.
+  nxpucihal_ctrl.quirk_mask = NxpConfig_GetNum<uint32_t>(NAME_NXP_UWB_QUIRK_MASK).value_or(0);
+  NXPLOG_UCIHAL_D("Quirk mask = 0x%x", nxpucihal_ctrl.quirk_mask);
 
   CONCURRENCY_UNLOCK();
 
@@ -594,6 +602,7 @@ static void handle_rx_packet(uint8_t *buffer, size_t length)
         nxpucihal_ctrl.cmdrsp.WakeupError(UWBSTATUS_FAILED);
       }
     } else {
+      // CMD was requested from upper layer.
       nxpucihal_ctrl.cmdrsp.Wakeup(gid, oid);
     }
   } // End of UCI_MT_RSP

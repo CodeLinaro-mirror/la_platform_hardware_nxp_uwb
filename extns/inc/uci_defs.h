@@ -103,6 +103,12 @@
 #define UCI_MSG_SESSION_STATE_IDLE                    (0x03)
 #define UCI_MSG_SESSION_STATE_UNDEFINED               (0xFF)  // SW defined
 
+// Session Config Group (0x1)
+#define UCI_MSG_SESSION_DEINIT                        1
+#define UCI_MSG_SESSION_DEINIT_CMD_LENGTH             8
+#define UCI_MSG_SESSION_DEINIT_CMD_HANDLE_OFFSET      4
+#define UCI_MSG_SESSION_DEINIT_RSP_LENGTH             5
+#define UCI_MSG_SESSION_DEINIT_STATUS_OFFSET          4
 #define UCI_MSG_SESSION_SET_APP_CONFIG                3
 #define UCI_MSG_SESSION_SET_APP_CONFIG_HANDLE_OFFSET  4
 #define UCI_MSG_SESSION_GET_APP_CONFIG                4
@@ -128,6 +134,10 @@ constexpr uint8_t kSessionType_AliroRanging = 0xA2;
 #define UCI_MSG_SESSION_START_HANDLE_OFFSET           (4)
 
 #define UCI_MSG_SESSION_STOP                          0x01
+#define UCI_MSG_SESSION_STOP_CMD_LENGTH               8
+#define UCI_MSG_SESSION_STOP_CMD_HANDLE_OFFSET        4
+#define UCI_MSG_SESSION_STOP_RSP_LENGTH               5
+#define UCI_MSG_SESSION_STOP_STATUS_OFFSET            4
 
 /**********************************************************
  * UCI Android Vendor Group-C: Opcodes and size of commands
@@ -167,11 +177,18 @@ constexpr uint8_t kSessionType_AliroRanging = 0xA2;
 /*************************************************
  * UCI Parameter IDs : Application Configurations
  ************************************************/
-#define UCI_PARAM_ID_CHANNEL_NUMBER 0x04
-#define UCI_PARAM_ID_TX_ADAPTIVE_PAYLOAD_POWER  0x1C  /* 2.0.0-0.9r4 CR-1038 removed this */
-#define UCI_PARAM_ID_AOA_AZIMUTH_MEASUREMENTS 0xE3
-#define UCI_PARAM_ID_AOA_ELEVATION_MEASUREMENTS 0xE4
-#define UCI_PARAM_ID_RANGE_MEASUREMENTS 0xE5
+#define UCI_PARAM_ID_CHANNEL_NUMBER                     0x04
+#define UCI_PARAM_ID_CHANNEL_NUMBER_LENGTH              1
+#define UCI_PARAM_ID_TX_ADAPTIVE_PAYLOAD_POWER          0x1C  /* 2.0.0-0.9r4 CR-1038 removed this */
+#define UCI_PARAM_ID_MAX_RR_RETRY                       0x2A
+#define UCI_PARAM_ID_MAX_RR_RETRY_LENGTH                2
+#define UCI_PARAM_ID_IN_BAND_TERMINATION_ATTEMPT_COUNT  0x2F
+#define UCI_PARAM_ID_IN_BAND_TERMINATION_ATTEMPT_COUNT_LENGTH   1
+#define UCI_PARAM_ID_MAX_NUMBER_OF_MEASUREMENT          0x32
+#define UCI_PARAM_ID_MAX_NUMBER_OF_MEASUREMENT_LENGTH   2
+#define UCI_PARAM_ID_AOA_AZIMUTH_MEASUREMENTS           0xE3
+#define UCI_PARAM_ID_AOA_ELEVATION_MEASUREMENTS         0xE4
+#define UCI_PARAM_ID_RANGE_MEASUREMENTS                 0xE5
 
 /*************************************************
  * Device Calibration Parameters IDs
@@ -184,6 +201,7 @@ constexpr uint8_t kSessionType_AliroRanging = 0xA2;
  ************************************************/
 /* Generic Status Codes */
 #define UCI_STATUS_OK 0x00
+#define UCI_STATUS_REJECTED 0x01
 #define UCI_STATUS_FAILED 0x02
 #define UCI_STATUS_SYNTAX_ERROR 0x03
 #define UCI_STATUS_INVALID_PARAM 0x04

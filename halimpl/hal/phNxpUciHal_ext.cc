@@ -850,7 +850,9 @@ bool phNxpUciHal_handle_set_app_config(size_t packet_len, const uint8_t* packet)
 
   const uint32_t session_handle =
     le_bytes_to_cpu<uint32_t>(&packet[UCI_MSG_SESSION_SET_APP_CONFIG_HANDLE_OFFSET]);
-  uint8_t ch = 0;
+  std::optional<uint8_t> param_channel;
+  std::optional<int> param_max_rr_retry;
+  std::optional<int> param_max_number_or_measurements;
 
   // 9 = Header 4 + SessionID 4 + NumOfConfigs 1
   uint8_t i = 9;
@@ -862,19 +864,25 @@ bool phNxpUciHal_handle_set_app_config(size_t packet_len, const uint8_t* packet)
     }
 
     // All parameters should have 1 byte tag
-    uint8_t tlv_tag = packet[i + 0];
-    uint8_t tlv_len = packet[i + 1];
-    uint8_t param_len = 2 + tlv_len;
+    const uint8_t tlv_tag = packet[i + 0];
+    const uint8_t tlv_len = packet[i + 1];
+    const uint8_t param_len = 2 + tlv_len;
+    const uint8_t* value_ptr = &packet[i + 2];
+
     if ((i + param_len) > packet_len) {
       NXPLOG_UCIHAL_E("SESSION_SET_APP_CONFIG_CMD parse error at %u", i);
     }
 
     // check restricted channel
-    if (tlv_tag == UCI_PARAM_ID_CHANNEL_NUMBER && tlv_len == 1) {
-      ch = packet[i + 2];
+    if (tlv_tag == UCI_PARAM_ID_CHANNEL_NUMBER &&
+        tlv_len == UCI_PARAM_ID_CHANNEL_NUMBER_LENGTH) {
+      static_assert(sizeof(uint8_t) == UCI_PARAM_ID_CHANNEL_NUMBER_LENGTH);
+      uint8_t ch = *value_ptr;
+      param_channel = ch;
 
       if (((ch == CHANNEL_NUM_5) && (rt_set->restricted_channel_mask & (1 << 5))) ||
           ((ch == CHANNEL_NUM_9) && (rt_set->restricted_channel_mask & (1 << 9)))) {
+
         phNxpUciHal_print_packet(NXP_TML_UCI_CMD_AP_2_UWBS, packet, packet_len);
         NXPLOG_UCIHAL_D("Country code blocked channel %u", ch);
 
@@ -885,11 +893,20 @@ bool phNxpUciHal_handle_set_app_config(size_t packet_len, const uint8_t* packet)
         report_uci_message(rsp_data, sizeof(rsp_data));
         return true;
       }
+    } else if (tlv_tag == UCI_PARAM_ID_MAX_RR_RETRY &&
+               tlv_len == UCI_PARAM_ID_MAX_RR_RETRY_LENGTH) {
+      static_assert(sizeof(uint16_t) == UCI_PARAM_ID_MAX_RR_RETRY_LENGTH);
+      param_max_rr_retry = le_bytes_to_cpu<uint16_t>(value_ptr);
+    } else if (tlv_tag == UCI_PARAM_ID_MAX_NUMBER_OF_MEASUREMENT &&
+               tlv_len == UCI_PARAM_ID_MAX_NUMBER_OF_MEASUREMENT_LENGTH) {
+      static_assert(sizeof(uint16_t) == UCI_PARAM_ID_MAX_NUMBER_OF_MEASUREMENT_LENGTH);
+      param_max_number_or_measurements = le_bytes_to_cpu<uint16_t>(value_ptr);
     }
     i += param_len;
   }
 
-  SessionTrack_onAppConfig(session_handle, ch);
+  SessionTrack_onAppConfig(session_handle,
+    param_channel, param_max_rr_retry, param_max_number_or_measurements);
 
   return false;
 }

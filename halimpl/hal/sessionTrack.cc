@@ -49,35 +49,61 @@ extern phNxpUciHal_Control_t nxpucihal_ctrl;
 // and resumes the device before sending any commands.
 // SessionTracks detects UWBS is in idle when there's no session created.
 //
+// 4. For CCC Session, in case `OVERRIDE_STS_INDEX_FOR_CCC_SESSION` is set,
 //
-// For CCC Session, in case `OVERRIDE_STS_INDEX_FOR_CCC_SESSION` is set,
 // 1) Set STS Index as as non Zero in case new ranging session
 // 2) Set STS Index to Last CCC STS Index + 1 in case of restarting a session.
 //
+// 5. Lazy session cleanups.
+//
+// For the session those who got REJECTED from SESSION_STOP or SESSION_DEINIT
+// due to UWBS' internal auto-termination job.
+// See SessionInfo::RequireDelayedDeinit() for the conditions.
+// This is only activated when kSessionDeinitRejected bit provided from
+// configuration files.
 
 class SessionTrack {
 private:
   // Session
   struct SessionInfo {
     uint32_t  session_id_;
+    uint32_t  session_handle_;
     uint8_t   session_type_;
     uint8_t   session_state_;
+
+    // App Configuration Parameters
     uint8_t   channel_;
+    int       max_rr_retry_;
+    int       max_measurements_;
+
     bool      ranging_started_;
-    SessionInfo(uint32_t session_id, uint8_t session_type) :
+    bool      deinit_delayed_;
+
+    SessionInfo(uint32_t session_id, uint32_t session_handle, uint8_t session_type) :
       session_id_(session_id),
+      session_handle_(session_handle),
       session_type_(session_type),
       session_state_(UCI_MSG_SESSION_STATE_UNDEFINED),
-      channel_(0),
-      ranging_started_(false) {
+      channel_(9),
+      max_rr_retry_(0),
+      max_measurements_(0),
+      ranging_started_(false),
+      deinit_delayed_(false) {
+    }
+
+    bool RequireDelayedDeinit() {
+      return ranging_started_ &&
+             (max_measurements_ > 0 || max_rr_retry_ > 0);
     }
   };
+
   enum class SessionTrackWorkType {
     IDLE = 0,
     REFRESH_IDLE,
     ACTIVATE,
     IDLE_TIMER_FIRED,
     DELETE_URSK,
+    SESSION_DEINIT,
     STOP,
   };
   enum class PowerState {
@@ -212,14 +238,26 @@ public:
   }
 
   // Called by upper-layer's SetAppConfig command handler
-  void OnChannelConfig(uint32_t session_handle, uint8_t channel) {
+  void OnSetAppConfig(uint32_t session_handle,
+                      std::optional<uint8_t> channel,
+                      std::optional<int> max_rr_retry,
+                      std::optional<int> max_measurements) {
     // Update channel info
     auto pSessionInfo = GetSessionInfo(session_handle);
     if (!pSessionInfo) {
       NXPLOG_UCIHAL_E("Unrecognized session app config detected, handle=0x%x", session_handle);
       pSessionInfo = AddNewSession(session_handle, kUnknownSessionId, kUnknownSessionType);
     }
-    pSessionInfo->channel_ = channel;
+
+    NXPLOG_UCIHAL_D("SessionTrack: handle=0x%x, channel=%u, (%d, %d)",
+                    session_handle, *channel,
+                    *max_rr_retry, *max_measurements);
+    if (channel)
+      pSessionInfo->channel_ = *channel;
+    if (max_measurements)
+      pSessionInfo->max_measurements_ = *max_measurements;
+    if (max_rr_retry)
+      pSessionInfo->max_rr_retry_ = *max_rr_retry;
   }
 
   // Called by upper-layer's SetCountryCode command handler,
@@ -269,18 +307,25 @@ public:
     if (packet_len != UCI_MSG_SESSION_START_CMD_LENGTH)
       return;
 
-    if (!override_sts_index_for_ccc_) {
-      return; /* Not needed / used... */
-    }
-
     uint32_t session_handle = le_bytes_to_cpu<uint32_t>(&packet[UCI_MSG_SESSION_START_HANDLE_OFFSET]);
-
     std::shared_ptr<SessionInfo> pSessionInfo = GetSessionInfo(session_handle);
 
     // Check STS_INDEX and fetch if it was not set by upper-layer
     if (!pSessionInfo) {
       NXPLOG_UCIHAL_E("Unrecognized session start detected, handle=0x%x", session_handle);
       pSessionInfo = AddNewSession(session_handle, kUnknownSessionId, kUnknownSessionType);
+    }
+
+    NXPLOG_UCIHAL_D("SessionTrack: session start, handle=0x%x "
+      "channel=%u max_rr=%d max_meas=%d",
+      session_handle, pSessionInfo->channel_,
+      pSessionInfo->max_rr_retry_,
+      pSessionInfo->max_measurements_);
+
+    pSessionInfo->deinit_delayed_ = false;
+
+    if (!override_sts_index_for_ccc_) {
+      return; /* Not needed / used... */
     }
 
     // Patches STS_INDEX only for CCC session.
@@ -320,6 +365,121 @@ public:
     }
   }
 
+  // Called by upper-layer's SESSION_STOP_CMD handler
+  void OnSessionStop(size_t packet_len, const uint8_t* packet){
+    if (!nxpucihal_ctrl.HasQuirk(Quirks::kSessionDeinitRejected))
+      return;
+
+    if (packet_len != UCI_MSG_SESSION_STOP_CMD_LENGTH)
+      return;
+
+    uint32_t session_handle =
+      le_bytes_to_cpu<uint32_t>(&packet[UCI_MSG_SESSION_STOP_CMD_HANDLE_OFFSET]);
+
+    auto session_info = GetSessionInfo(session_handle);
+    if (session_info == nullptr) {
+      NXPLOG_UCIHAL_W("Unregistered session handle 0x%x in SESSION_STOP_CMD",
+                      session_handle);
+      return;
+    }
+
+    if (!session_info->RequireDelayedDeinit())
+      return;
+
+    auto session_stop_rsp_cb =
+      [this, session_info](size_t packet_len, const uint8_t *packet) -> bool
+    {
+      if (packet_len != UCI_MSG_SESSION_STOP_RSP_LENGTH) {
+        NXPLOG_UCIHAL_E("Unrecognized SESSION_STOP_RSP");
+        return false;
+      }
+
+      uint8_t status = packet[UCI_MSG_SESSION_STOP_STATUS_OFFSET];
+      if (status != UCI_STATUS_REJECTED) {
+        return false;
+      }
+
+      // Sends patched RSP packet to upper layer.
+      NXPLOG_UCIHAL_W("SessionTrack: Quirk: SESSION_STOP_RSP patched.");
+      uint8_t rsp[UCI_MSG_SESSION_STOP_RSP_LENGTH];
+      memcpy(rsp, packet, packet_len);
+      rsp[UCI_MSG_SESSION_STOP_STATUS_OFFSET] = UCI_STATUS_OK;
+      report_uci_message(rsp, sizeof(rsp));
+      return true;
+    };
+
+    phNxpUciHal_rx_handler_add(
+      UCI_MT_RSP, UCI_GID_SESSION_CONTROL, UCI_MSG_SESSION_STOP,
+      /*run_once=*/true, session_stop_rsp_cb);
+  }
+
+  // Called by upper-layer's SESSION_DEINIT_CMD handler.
+  void OnSessionDeinit(size_t packet_len, const uint8_t* packet){
+    if (!nxpucihal_ctrl.HasQuirk(Quirks::kSessionDeinitRejected))
+      return;
+
+    if (packet_len != UCI_MSG_SESSION_DEINIT_CMD_LENGTH)
+      return;
+
+    uint32_t session_handle =
+      le_bytes_to_cpu<uint32_t>(&packet[UCI_MSG_SESSION_DEINIT_CMD_HANDLE_OFFSET]);
+
+    auto session_info = GetSessionInfo(session_handle);
+    if (session_info == nullptr) {
+      NXPLOG_UCIHAL_W("Unregistered session handle 0x%x in SESSION_DEINIT_CMD",
+                      session_handle);
+      return;
+    }
+
+    if (!session_info->RequireDelayedDeinit())
+      return;
+
+    auto session_deinit_rsp_cb =
+      [this, session_info](size_t packet_len, const uint8_t *packet) -> bool
+    {
+      if (packet_len != UCI_MSG_SESSION_DEINIT_RSP_LENGTH) {
+        NXPLOG_UCIHAL_E("Unrecognized SESSION_DEINIT_RSP");
+        return false;
+      }
+
+      uint8_t status = packet[UCI_MSG_SESSION_DEINIT_STATUS_OFFSET];
+      if (status == UCI_STATUS_OK) {
+        return false;
+      }
+
+      if (status != UCI_STATUS_REJECTED)
+        return false;
+
+      NXPLOG_UCIHAL_W("SessionTrack: Quirk: SESSION_DEINIT_RSP rejected");
+
+      // Marks this session as delayed deinit,
+      // SessionTrack thread will execute session deinit
+      // from session status notification with IDLE.
+      session_info->deinit_delayed_ = true;
+
+      if (session_info->session_state_ != UCI_MSG_SESSION_STATE_ACTIVE) {
+        // This session already entered IDLE.
+        // We won't get session status notification in this case.
+        NXPLOG_UCIHAL_W("SessionTrack: Quirk: SESSION_DEINIT_RSP rejected in 0x%x, possible session leak!",
+                        session_info->session_state_);
+        return false;
+      }
+
+      // Sends patched RSP packet to upper layer.
+      NXPLOG_UCIHAL_W("SessionTrack: Quirk: SESSION_DEINIT_RSP patched, SESSION_DEINIT delayed.");
+
+      uint8_t rsp[UCI_MSG_SESSION_DEINIT_RSP_LENGTH];
+      memcpy(rsp, packet, packet_len);
+      rsp[UCI_MSG_SESSION_STOP_STATUS_OFFSET] = UCI_STATUS_OK;
+      report_uci_message(rsp, sizeof(rsp));
+      return true;
+    };
+
+    phNxpUciHal_rx_handler_add(
+      UCI_MT_RSP, UCI_GID_SESSION_MANAGE, UCI_MSG_SESSION_DEINIT,
+      /*run_once=*/true, session_deinit_rsp_cb);
+  }
+
 private:
   // Send SESSION_STOP_CMD
   void StopRanging(uint32_t session_handle) {
@@ -350,7 +510,7 @@ private:
         if (packet_len < 5)
           return true;
         if (packet[4] != UWBSTATUS_SUCCESS) {
-          NXPLOG_UCIHAL_E("SessionTrack: URSR_DELETE failed, rsp status=0x%x", packet[4]);
+          NXPLOG_UCIHAL_E("SessionTrack: URSK_DELETE failed, rsp status=0x%x", packet[4]);
         }
         return true;
       }
@@ -469,6 +629,38 @@ private:
     }
   }
 
+  void SessionDeinit(std::shared_ptr<SessionInfo> session_info) {
+    if (!session_info)
+      return;
+
+    phNxpUciHal_rx_handler_add(UCI_MT_RSP, UCI_GID_SESSION_MANAGE,
+                               UCI_MSG_SESSION_DEINIT, /*run_once=*/true,
+      [](size_t packet_len, const uint8_t *packet) -> bool {
+        if (packet_len < 5)
+          return true;
+        if (packet[4] != UWBSTATUS_SUCCESS) {
+          NXPLOG_UCIHAL_E("SessionTrack: SESSION_DEINIT failed, possible session leak! rsp status=0x%x",
+                          packet[4]);
+        } else {
+          NXPLOG_UCIHAL_D("SessionTrack: delayed SESSION_DEINIT executed successfully.");
+        }
+        return true;
+      }
+    );
+    std::vector<uint8_t> packet{
+      (UCI_MT_CMD << UCI_MT_SHIFT) | UCI_GID_SESSION_MANAGE,
+      UCI_MSG_SESSION_DEINIT,
+      0x00,
+      0x00
+    };
+    uint8_t session_handle_bytes[4];
+    cpu_to_le_bytes(session_handle_bytes, session_info->session_handle_);
+    packet.insert(packet.end(), std::begin(session_handle_bytes), std::end(session_handle_bytes));
+    packet[UCI_PAYLOAD_LENGTH_OFFSET] = packet.size() - UCI_MSG_HDR_SIZE;
+
+    phNxpUciHal_send_ext_cmd(packet.size(), packet.data());
+  }
+
   std::pair<bool, uint32_t> QueryStsIndex(uint32_t session_handle)
   {
     return GetAppConfLe32(session_handle, UCI_APP_CONFIG_FIRA_STS_INDEX);
@@ -537,22 +729,30 @@ private:
     NXPLOG_UCIHAL_D("SessionTrack: update session handle 0x%08x state %u", session_handle, session_state);
     pSessionInfo->session_state_ = session_state;
 
-    if (session_state == UCI_MSG_SESSION_STATE_DEINIT) {
-      if ((delete_ursk_ccc_enabled_ &&
-          pSessionInfo->session_type_ == kSessionType_CCCRanging)
-          || (delete_ursk_aliro_enabled_ &&
-            pSessionInfo->session_type_ == kSessionType_AliroRanging)) {
-
-        // If CCC or Aliro ranging session, issue DELETE_URSK_CMD for this
-        // session. This is executed on client thread, we shouldn't block the
-        // execution of this thread.
-        QueueDeleteUrsk(pSessionInfo);
-      }
-      RemoveSession(session_handle);
-    } else if (session_state == UCI_MSG_SESSION_STATE_ACTIVE) {
-      // mark this session has been started at
-      pSessionInfo->ranging_started_ = true;
+    switch (session_state) {
+      case UCI_MSG_SESSION_STATE_IDLE:
+        if (pSessionInfo->deinit_delayed_) {
+          QueueSessionDeinit(pSessionInfo);
+        }
+        break;
+      case UCI_MSG_SESSION_STATE_DEINIT:
+        if ((delete_ursk_ccc_enabled_ && pSessionInfo->session_type_ == kSessionType_CCCRanging) ||
+            (delete_ursk_aliro_enabled_ && pSessionInfo->session_type_ == kSessionType_AliroRanging)) {
+          // If CCC or Aliro ranging session, issue DELETE_URSK_CMD for this
+          // session. This is executed on client thread, we shouldn't block the
+          // execution of this thread.
+          QueueDeleteUrsk(pSessionInfo);
+        }
+        RemoveSession(session_handle);
+        break;
+      case UCI_MSG_SESSION_STATE_ACTIVE:
+        // mark this session has been started.
+        pSessionInfo->ranging_started_ = true;
+        break;
+      default:
+        break;
     }
+
     return false;
   }
 
@@ -648,6 +848,11 @@ private:
         DeleteUrsk(msg->session_info_);
         CONCURRENCY_UNLOCK();
         break;
+      case SessionTrackWorkType::SESSION_DEINIT:
+        CONCURRENCY_LOCK();
+        SessionDeinit(msg->session_info_);
+        CONCURRENCY_UNLOCK();
+        break;
       case SessionTrackWorkType::STOP:
         stop_thread = true;
         break;
@@ -696,6 +901,13 @@ private:
     QueueSessionTrackWork(msg);
   }
 
+  void QueueSessionDeinit(std::shared_ptr<SessionInfo> pSessionInfo) {
+    // This job will execute another UCI transaction.
+    auto msg = std::make_shared<SessionTrackMsg>(
+      SessionTrackWorkType::SESSION_DEINIT, pSessionInfo, false);
+    QueueSessionTrackWork(msg);
+  }
+
   // Adds a new session info and transition to ACTIVE when it was in idle.
   std::shared_ptr<SessionInfo> AddNewSession(uint32_t session_handle,
                                              uint32_t session_id,
@@ -706,7 +918,7 @@ private:
     bool was_idle = IsDeviceIdle();
 
     std::shared_ptr<SessionInfo> info =
-      std::make_shared<SessionInfo>(session_id, session_type);
+      std::make_shared<SessionInfo>(session_id, session_handle, session_type);
     sessions_.emplace(std::make_pair(session_handle, info));
 
     if (was_idle) {
@@ -765,10 +977,14 @@ void SessionTrack_onCountryCodeChanged()
     gSessionTrack->OnCountryCodeChanged();
 }
 
-void SessionTrack_onAppConfig(uint32_t session_handle, uint8_t channel)
+void SessionTrack_onAppConfig(uint32_t session_handle,
+                              std::optional<uint8_t> channel,
+                              std::optional<int> max_rr_retry,
+                              std::optional<int> max_measurements)
 {
   if (gSessionTrack)
-    gSessionTrack->OnChannelConfig(session_handle, channel);
+    gSessionTrack->OnSetAppConfig(session_handle, channel,
+      max_rr_retry, max_measurements);
 }
 
 void SessionTrack_keepAlive()
@@ -787,4 +1003,16 @@ void SessionTrack_onSessionStart(size_t packet_len, const uint8_t *packet)
 {
   if (gSessionTrack)
     gSessionTrack->OnSessionStart(packet_len, packet);
+}
+
+void SessionTrack_onSessionDeinit(size_t packet_len, const uint8_t* packet)
+{
+  if (gSessionTrack)
+    gSessionTrack->OnSessionDeinit(packet_len, packet);
+}
+
+void SessionTrack_onSessionStop(size_t packet_len, const uint8_t* packet)
+{
+  if (gSessionTrack)
+    gSessionTrack->OnSessionStop(packet_len, packet);
 }
