@@ -17,7 +17,10 @@
 #ifndef _PHNXPUCIHAL_H_
 #define _PHNXPUCIHAL_H_
 
+#include <functional>
+#include <memory>
 #include <thread>
+#include <utility>
 
 #include "hal_nxpuwb.h"
 #include "NxpUwbChip.h"

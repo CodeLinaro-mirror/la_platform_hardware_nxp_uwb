@@ -17,10 +17,14 @@
 
 #include <atomic>
 #include <bitset>
+#include <format>
 #include <limits>
 #include <map>
 #include <optional>
 #include <span>
+#include <string>
+#include <string_view>
+#include <utility>
 #include <vector>
 
 #include <cutils/properties.h>
