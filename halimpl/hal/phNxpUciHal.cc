@@ -919,6 +919,10 @@ tHAL_UWB_STATUS phNxpUciHal_hw_init()
     NXPLOG_UCIHAL_E("HAL not initialized");
     return UWBSTATUS_FAILED;
   }
+  if (nxpucihal_ctrl.uwb_device_initialized) {
+    NXPLOG_UCIHAL_E("Device already initialized.");
+    return UWBSTATUS_FAILED;
+  }
   nxpucihal_ctrl.uwb_device_initialized = false;
 
   // Device Status Notification
@@ -1007,11 +1011,16 @@ tHAL_UWB_STATUS phNxpUciHal_hw_init()
 
 failed_hw_init:
   phTmlUwb_StopRead();
+  nxpucihal_ctrl.uwb_device_initialized = false;
   return UWBSTATUS_FAILED;
 }
 
 void phNxpUciHal_hw_deinit()
 {
+  if (nxpucihal_ctrl.uwb_device_initialized) {
+    phTmlUwb_StopRead();
+    nxpucihal_ctrl.uwb_device_initialized = false;
+  }
 }
 
 void phNxpUciHal_hw_suspend()

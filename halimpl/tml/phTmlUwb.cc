@@ -156,9 +156,6 @@ tHAL_UWB_STATUS phTmlUwb_Init(const char* pDevName,
 
   setDeviceHandle(gpphTmlUwb_Context->pDevHandle);  // To set device handle for FW download usecase
 
-  if (sem_init(&gpphTmlUwb_Context->rxSemaphore, 0, 0)) {
-    return UWBSTATUS_FAILED;
-  }
   if (sem_init(&gpphTmlUwb_Context->txSemaphore, 0, 0)) {
     return UWBSTATUS_FAILED;
   }
@@ -412,7 +409,6 @@ static void phTmlUwb_CleanUp(void) {
     (void)phTmlUwb_Spi_Ioctl(gpphTmlUwb_Context->pDevHandle, phTmlUwb_ControlCode_t::SetPower, 0);
   }
 
-  sem_destroy(&gpphTmlUwb_Context->rxSemaphore);
   sem_destroy(&gpphTmlUwb_Context->txSemaphore);
   if (pthread_mutex_destroy(&gpphTmlUwb_Context->wait_busy_lock)) {
     NXPLOG_TML_E("[%s] Failed to destroy mutex 'wait_busy_lock' at line: %d", __func__, __LINE__);
@@ -576,6 +572,12 @@ tHAL_UWB_STATUS phTmlUwb_StartRead(ReadCallback pTmlReadComplete, void* pContext
   gpphTmlUwb_Context->tReadInfo.pThread_Callback = pTmlReadComplete;
   gpphTmlUwb_Context->tReadInfo.pContext = pContext;
 
+  NXPLOG_TML_D("StartRead");
+
+  if (sem_init(&gpphTmlUwb_Context->rxSemaphore, 0, 0)) {
+    return UWBSTATUS_FAILED;
+  }
+
   /* Set first event to invoke Reader Thread */
   sem_post(&gpphTmlUwb_Context->rxSemaphore);
 
@@ -592,6 +594,7 @@ tHAL_UWB_STATUS phTmlUwb_StartRead(ReadCallback pTmlReadComplete, void* pContext
 
 void phTmlUwb_StopRead()
 {
+  NXPLOG_TML_D("StopRead");
   gpphTmlUwb_Context->tReadInfo.bThreadShouldStop = true;
 
   if (gpphTmlUwb_Context->tReadInfo.bThreadRunning) {
@@ -602,6 +605,10 @@ void phTmlUwb_StopRead()
     if (pthread_join(gpphTmlUwb_Context->readerThread, NULL)) {
       NXPLOG_TML_E("[%s] pthread_join failed for reader thread at line: %d ", __func__, __LINE__);
     }
+    if (gpphTmlUwb_Context->tReadInfo.bThreadRunning) {
+      NXPLOG_TML_E("Failed to terminate read thread.");
+    }
+    sem_destroy(&gpphTmlUwb_Context->rxSemaphore);
   }
 }
 
