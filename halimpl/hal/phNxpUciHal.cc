@@ -947,7 +947,7 @@ tHAL_UWB_STATUS phNxpUciHal_hw_init()
 
   status = phTmlUwb_StartRead(&phNxpUciHal_read_complete, NULL);
   if (status != UWBSTATUS_SUCCESS) {
-    NXPLOG_UCIHAL_E("read status error status = %x", status);
+    NXPLOG_UCIHAL_E("Failed to start reader thread, %x", status);
     return status;
   }
 

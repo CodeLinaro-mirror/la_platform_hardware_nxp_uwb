@@ -200,6 +200,11 @@ inline constexpr char NXP_HAL_ERROR[] = "NxpHalE";
 
 /* Logging APIs used by NxpFwDnld module */
 #if (ENABLE_FWDNLD_TRACES == TRUE)
+#define NXPLOG_FWDNLD_V(...)                                       \
+  {                                                                \
+    if (gLog_level.dnld_log_level >= NXPLOG_LOG_VERBOSE_LOGLEVEL)  \
+      LOG_PRI(ANDROID_LOG_VERBOSE, NXPLOG_ITEM_FWDNLD, __VA_ARGS__); \
+  }
 #define NXPLOG_FWDNLD_D(...)                                       \
   {                                                                \
     if ((gLog_level.dnld_log_level >= NXPLOG_LOG_DEBUG_LOGLEVEL))  \
