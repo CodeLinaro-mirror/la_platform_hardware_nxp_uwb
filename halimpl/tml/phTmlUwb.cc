@@ -489,38 +489,38 @@ tHAL_UWB_STATUS phTmlUwb_Shutdown(void)
 tHAL_UWB_STATUS phTmlUwb_Write(const uint8_t* pBuffer, size_t wLength,
                          WriteCallback pTmlWriteComplete,
                          void* pContext) {
-  tHAL_UWB_STATUS wWriteStatus;
-
   /* Check whether TML is Initialized */
-
-  if (NULL != gpphTmlUwb_Context) {
-    if ((NULL != gpphTmlUwb_Context->pDevHandle) && (NULL != pBuffer) &&
-        (PH_TMLUWB_RESET_VALUE != wLength) && (NULL != pTmlWriteComplete)) {
-      if (!gpphTmlUwb_Context->tWriteInfo.bThreadBusy) {
-        /* Setting the flag marks beginning of a Write Operation */
-        gpphTmlUwb_Context->tWriteInfo.bThreadBusy = true;
-        /* Copy the buffer, length and Callback function,
-           This shall be utilized while invoking the Callback function in thread
-           */
-        gpphTmlUwb_Context->tWriteInfo.pBuffer = pBuffer;
-        gpphTmlUwb_Context->tWriteInfo.wLength = wLength;
-        gpphTmlUwb_Context->tWriteInfo.pThread_Callback = pTmlWriteComplete;
-        gpphTmlUwb_Context->tWriteInfo.pContext = pContext;
-
-        wWriteStatus = UWBSTATUS_PENDING;
-        /* Set event to invoke Writer Thread */
-        sem_post(&gpphTmlUwb_Context->txSemaphore);
-      } else {
-        wWriteStatus = PHUWBSTVAL(CID_UWB_TML, UWBSTATUS_BUSY);
-      }
-    } else {
-      wWriteStatus = PHUWBSTVAL(CID_UWB_TML, UWBSTATUS_INVALID_PARAMETER);
-    }
-  } else {
-    wWriteStatus = PHUWBSTVAL(CID_UWB_TML, UWBSTATUS_NOT_INITIALISED);
+  if (gpphTmlUwb_Context == nullptr) {
+    return UWBSTATUS_NOT_INITIALISED;
   }
 
-  return wWriteStatus;
+  if (gpphTmlUwb_Context->pDevHandle == nullptr || pBuffer == nullptr ||
+     wLength == 0 || pTmlWriteComplete == nullptr) {
+    return UWBSTATUS_INVALID_PARAMETER;
+  }
+
+  if (gpphTmlUwb_Context->tWriteInfo.bThreadBusy) {
+    return UWBSTATUS_BUSY;
+  }
+
+  // Only one tx transaction can be executed at a time.
+  static uint8_t buffer[UCI_MAX_DATA_LEN];
+  if (wLength > sizeof(buffer)) {
+    return UWBSTATUS_FAILED;
+  }
+  memcpy(buffer, pBuffer, wLength);
+
+  /* Setting the flag marks beginning of a Write Operation */
+  gpphTmlUwb_Context->tWriteInfo.bThreadBusy = true;
+  gpphTmlUwb_Context->tWriteInfo.pBuffer = buffer;
+  gpphTmlUwb_Context->tWriteInfo.wLength = wLength;
+  gpphTmlUwb_Context->tWriteInfo.pThread_Callback = pTmlWriteComplete;
+  gpphTmlUwb_Context->tWriteInfo.pContext = pContext;
+
+  /* Set event to invoke Writer Thread */
+  sem_post(&gpphTmlUwb_Context->txSemaphore);
+
+  return UWBSTATUS_PENDING;
 }
 
 /*******************************************************************************

@@ -85,13 +85,8 @@ tHAL_UWB_STATUS phNxpUciHal_process_ext_cmd_rsp(size_t cmd_len,
   uint8_t gid = p_cmd[0] & UCI_GID_MASK;
   uint8_t oid = p_cmd[1] & UCI_OID_MASK;
 
-  // Creates local copy of cmd_data,
-  // Tml writer thread will use this buffer directly.
-  uint8_t cmd[UCI_MAX_DATA_LEN];
-  memcpy(cmd, p_cmd, cmd_len);
-
   /* Vendor Specific Parsing logic */
-  if (phNxpUciHal_hook_cmd(cmd_len, cmd)) {
+  if (phNxpUciHal_hook_cmd(cmd_len, p_cmd)) {
     return UWBSTATUS_SUCCESS;
   }
 
@@ -105,7 +100,7 @@ tHAL_UWB_STATUS phNxpUciHal_process_ext_cmd_rsp(size_t cmd_len,
   }
   while(nr_retries < MAX_COMMAND_RETRY_COUNT) {
     nxpucihal_ctrl.cmdrsp.StartCmd(gid, oid);
-    status = phNxpUciHal_write_unlocked(cmd_len, cmd);
+    status = phNxpUciHal_write_unlocked(cmd_len, p_cmd);
 
     if (status != UWBSTATUS_SUCCESS) {
       NXPLOG_UCIHAL_D("phNxpUciHal_write failed for hal ext");
