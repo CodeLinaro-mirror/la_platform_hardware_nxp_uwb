@@ -66,7 +66,7 @@
 tHAL_UWB_STATUS phNxpUciHal_send_ext_cmd(size_t cmd_len, const uint8_t* p_cmd);
 tHAL_UWB_STATUS phNxpUciHal_process_ext_rsp(size_t cmd_len, uint8_t* p_buff);
 tHAL_UWB_STATUS phNxpUciHal_set_board_config();
-void phNxpUciHal_handle_set_calibration(uint8_t *p_data, size_t data_len);
+void phNxpUciHal_handle_set_calibration(const uint8_t *p_data, size_t data_len);
 void phNxpUciHal_extcal_handle_coreinit(void);
 void phNxpUciHal_process_response();
 void phNxpUciHal_handle_set_country_code(const char country_code[2]);

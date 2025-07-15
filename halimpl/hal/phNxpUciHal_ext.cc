@@ -74,7 +74,6 @@ tHAL_UWB_STATUS phNxpUciHal_process_ext_cmd_rsp(size_t cmd_len,
     return UWBSTATUS_FAILED;
   }
 
-
   // PBF=1 or DATA packet: don't check RSP
   // upper-layer should handle the case of UWBSTATUS_COMMAND_RETRANSMIT && isRetryNotRequired
   if (phNxpUciHal_is_retry_not_required(p_cmd[0]) ||
@@ -86,12 +85,13 @@ tHAL_UWB_STATUS phNxpUciHal_process_ext_cmd_rsp(size_t cmd_len,
   uint8_t gid = p_cmd[0] & UCI_GID_MASK;
   uint8_t oid = p_cmd[1] & UCI_OID_MASK;
 
-  // Create local copy of cmd_data
+  // Creates local copy of cmd_data,
+  // Tml writer thread will use this buffer directly.
   uint8_t cmd[UCI_MAX_DATA_LEN];
   memcpy(cmd, p_cmd, cmd_len);
 
   /* Vendor Specific Parsing logic */
-  if (phNxpUciHal_parse(&cmd_len, cmd)) {
+  if (phNxpUciHal_hook_cmd(cmd_len, cmd)) {
     return UWBSTATUS_SUCCESS;
   }
 
@@ -348,65 +348,62 @@ static bool phNxpUciHal_is_retry_not_required(uint8_t uci_octet0) {
 /******************************************************************************
  * Function         CountryCodeCapsGenTxPowerPacket
  *
- * Description      This function makes tx antenna power calibration command
- *                  with gtx_power[] + tx_power_offset
+ * Description      Saves the received calibration command from upper-layer
+ *                  to gtx_power[] and applies tx_power_offset to it.
  *
  * Returns          true if packet has been updated
  *
  ******************************************************************************/
-static bool CountryCodeCapsGenTxPowerPacket(uint8_t *packet, size_t packet_len)
+static void CountryCodeCapsGenTxPowerPacket(const uint8_t* p_data, size_t data_len)
 {
   phNxpUciHal_Runtime_Settings_t *rt_set = &nxpucihal_ctrl.rt_settings;
 
   if (rt_set->tx_power_offset == 0)
-    return false;
+    return;
 
-  if (gtx_power.empty())
-    return false;
-
-  if (gtx_power.size() != packet_len)
-    return false;
-
+  // Remembers the calibration command sent by upper-layer.
+  gtx_power = std::move(std::vector<uint8_t> {p_data, p_data + data_len});
   size_t gtx_power_len = gtx_power.size();
-  memcpy(packet, gtx_power.data(), gtx_power_len);
   uint8_t index = UCI_MSG_HDR_SIZE + 2;  // channel + Tag
 
   // Length
   if (index > gtx_power_len) {
     NXPLOG_UCIHAL_E("Upper-layer calibration command for tx_power is invalid.");
-    return false;
+    gtx_power.clear();
+    return;
   }
-  if (!packet[index] || (packet[index] + index) > gtx_power_len) {
+  if (!gtx_power[index] || (gtx_power[index] + index) > gtx_power_len) {
     NXPLOG_UCIHAL_E("Upper-layer calibration command for tx_power is invalid.");
-    return false;
+    gtx_power.clear();
+    return;
   }
   index++;
 
   // Value[0] = Number of antennas
-  uint8_t num_of_antennas = packet[index++];
+  uint8_t num_of_antennas = gtx_power[index++];
 
   while (num_of_antennas--) {
     // each entry = { antenna-id(1) + peak_tx(2) + id_rms(2) }
     if ((index + 5) < gtx_power_len) {
       NXPLOG_UCIHAL_E("Upper-layer calibration command for tx_power is invalid.");
-      return false;
+      gtx_power.clear();
+      return;
     }
 
     index += 3; // antenna Id(1) + Peak Tx(2)
 
     // Adjust id_rms part
-    long tx_power_long = packet[index]  | ((packet[index + 1] << RMS_TX_POWER_SHIFT) & 0xFF00);
+    long tx_power_long = gtx_power[index]  | ((gtx_power[index + 1] << RMS_TX_POWER_SHIFT) & 0xFF00);
     tx_power_long += rt_set->tx_power_offset;
 
     if (tx_power_long < 0)
       tx_power_long = 0;
 
     uint16_t tx_power_u16 = (uint16_t)tx_power_long;
-    packet[index++] = tx_power_u16 & 0xff;
-    packet[index++] = tx_power_u16 >> RMS_TX_POWER_SHIFT;
+    gtx_power[index++] = tx_power_u16 & 0xff;
+    gtx_power[index++] = tx_power_u16 >> RMS_TX_POWER_SHIFT;
   }
-
-  return true;
+  NXPLOG_UCIHAL_D("Vendor specific calibration command received and patched.");
 }
 
 // TODO: remove this out
@@ -418,7 +415,7 @@ static bool CountryCodeCapsGenTxPowerPacket(uint8_t *packet, size_t packet_len)
  * Returns      void
  *
  *******************************************************************************/
-void phNxpUciHal_handle_set_calibration(uint8_t *p_data, size_t data_len)
+void phNxpUciHal_handle_set_calibration(const uint8_t *p_data, size_t data_len)
 {
   // Only saves the SET_CALIBRATION_CMD from upper-layer
   if (nxpucihal_ctrl.hal_ext_enabled) {
@@ -440,10 +437,8 @@ void phNxpUciHal_handle_set_calibration(uint8_t *p_data, size_t data_len)
   // RMS Tx power -> Octet [4, 5] in calib data
   NXPLOG_UCIHAL_D("phNxpUciHal_handle_set_calibration channel=%u tx_power_offset=%d", channel, rt_set->tx_power_offset);
 
-  // Backup the packet to gtx_power[]
-  gtx_power = std::move(std::vector<uint8_t> {p_data, p_data + data_len});
-
-  // Patch SET_CALIBRATION_CMD per gtx_power + tx_power_offset
+  // Saves the received calibration packet and patches it with
+  // tx_power_offset provided by COUNTRY_CODE_CAPS.
   CountryCodeCapsGenTxPowerPacket(p_data, data_len);
 }
 
@@ -461,13 +456,7 @@ static bool CountryCodeCapsApplyTxPower(void)
   if (gtx_power.empty())
     return false;
 
-  // use whole packet as-is from upper-layer command (gtx_power[])
-  std::vector<uint8_t> packet(gtx_power.size());
-  size_t packet_size = 0;
-  if (!CountryCodeCapsGenTxPowerPacket(packet.data(), packet.size()))
-    return false;
-
-  tHAL_UWB_STATUS status = phNxpUciHal_send_ext_cmd(packet.size(), packet.data());
+  tHAL_UWB_STATUS status = phNxpUciHal_send_ext_cmd(gtx_power.size(), gtx_power.data());
   if (status != UWBSTATUS_SUCCESS) {
       NXPLOG_UCIHAL_D("%s: send failed", __func__);
   }

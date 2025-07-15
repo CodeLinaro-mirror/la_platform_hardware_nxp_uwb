@@ -269,31 +269,30 @@ static void phNxpUciHal_client_thread(phNxpUciHal_Control_t* p_nxpucihal_ctrl)
 }
 
 /******************************************************************************
- * Function         phNxpUciHal_parse
+ * Function         phNxpUciHal_hook_cmd
  *
  * Description      This function parses all the data passing through the HAL.
  *
  * Returns          It returns true if the incoming command to be skipped.
  *
  ******************************************************************************/
-bool phNxpUciHal_parse(size_t* cmdlen, uint8_t* cmd)
+bool phNxpUciHal_hook_cmd(size_t cmdlen, const uint8_t* cmd)
 {
-  bool ret = false;
-
-  if ((*cmdlen) < UCI_MSG_HDR_SIZE) {
+  if (cmdlen < UCI_MSG_HDR_SIZE) {
     return false;
   }
 
-  const uint8_t mt = (cmd[0] &UCI_MT_MASK) >> UCI_MT_SHIFT;
+  const uint8_t mt = (cmd[0] & UCI_MT_MASK) >> UCI_MT_SHIFT;
   const uint8_t gid = cmd[0] & UCI_GID_MASK;
   const uint8_t oid = cmd[1] & UCI_OID_MASK;
+
   if (mt != UCI_MT_CMD) {
     return false;
   }
 
-  if ((gid == UCI_GID_ANDROID) && (oid == UCI_MSG_ANDROID_SET_COUNTRY_CODE)) {
+  if (gid == UCI_GID_ANDROID && oid == UCI_MSG_ANDROID_SET_COUNTRY_CODE) {
     char country_code[2];
-    if ((*cmdlen) == 6) {
+    if (cmdlen == 6) {
       country_code[0] = (char)cmd[4];
       country_code[1] = (char)cmd[5];
     } else {
@@ -303,20 +302,22 @@ bool phNxpUciHal_parse(size_t* cmdlen, uint8_t* cmd)
     }
     phNxpUciHal_handle_set_country_code(country_code);
     return true;
-  } else if ((gid == UCI_GID_PROPRIETARY_0x0F) && (oid == SET_VENDOR_SET_CALIBRATION)) {
+  } else if (gid == UCI_GID_PROPRIETARY_0x0F && oid == SET_VENDOR_SET_CALIBRATION) {
+    // TODO: remove this out.
     if (cmd[UCI_MSG_HDR_SIZE + 1] == VENDOR_CALIB_PARAM_TX_POWER_PER_ANTENNA) {
-      // XXX: packet can be patched by here.
-      phNxpUciHal_handle_set_calibration(cmd, *cmdlen);
+      phNxpUciHal_handle_set_calibration(cmd, cmdlen);
+      return true;
     }
-  } else if ((gid == UCI_GID_SESSION_MANAGE) && (oid == UCI_MSG_SESSION_SET_APP_CONFIG)) {
-    // XXX: packet can be patched by here.
-    return phNxpUciHal_handle_set_app_config(*cmdlen, cmd);
-  } else if ((gid == UCI_GID_SESSION_MANAGE) && (oid == UCI_MSG_SESSION_STATE_INIT)) {
-    SessionTrack_onSessionInit(*cmdlen, cmd);
-  } if (mt == UCI_MT_CMD && gid == UCI_GID_SESSION_CONTROL && oid == UCI_MSG_SESSION_START) {
-    SessionTrack_onSessionStart(*cmdlen, cmd);
+  } else if (gid == UCI_GID_SESSION_MANAGE && oid == UCI_MSG_SESSION_SET_APP_CONFIG) {
+    return phNxpUciHal_handle_set_app_config(cmdlen, cmd);
+  } else if (gid == UCI_GID_SESSION_MANAGE && oid == UCI_MSG_SESSION_STATE_INIT) {
+    SessionTrack_onSessionInit(cmdlen, cmd);
+    return false;
+  } else if (gid == UCI_GID_SESSION_CONTROL && oid == UCI_MSG_SESSION_START) {
+    SessionTrack_onSessionStart(cmdlen, cmd);
+    return false;
   }
-  return ret;
+  return false;
 }
 
 /******************************************************************************
@@ -420,7 +421,7 @@ tHAL_UWB_STATUS phNxpUciHal_open(uwb_stack_callback_t* p_cback, uwb_stack_data_c
  *                  is called to check if there is any extension processing
  *                  is required for the UCI packet being sent out.
  *
- * Returns          It returns number of bytes successfully written to UWBC.
+ * Returns          It returns number of bytes successfully written to UWBS.
  *
  ******************************************************************************/
 int32_t phNxpUciHal_write(size_t data_len, const uint8_t* p_data) {
@@ -430,6 +431,7 @@ int32_t phNxpUciHal_write(size_t data_len, const uint8_t* p_data) {
   SessionTrack_keepAlive();
 
   CONCURRENCY_LOCK();
+
   auto status = phNxpUciHal_process_ext_cmd_rsp(data_len, p_data);
   CONCURRENCY_UNLOCK();
 
