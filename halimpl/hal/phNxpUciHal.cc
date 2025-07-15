@@ -310,7 +310,7 @@ bool phNxpUciHal_parse(size_t* cmdlen, uint8_t* cmd)
     }
   } else if ((gid == UCI_GID_SESSION_MANAGE) && (oid == UCI_MSG_SESSION_SET_APP_CONFIG)) {
     // XXX: packet can be patched by here.
-    return phNxpUciHal_handle_set_app_config(cmdlen, cmd);
+    return phNxpUciHal_handle_set_app_config(*cmdlen, cmd);
   } else if ((gid == UCI_GID_SESSION_MANAGE) && (oid == UCI_MSG_SESSION_STATE_INIT)) {
     SessionTrack_onSessionInit(*cmdlen, cmd);
   } if (mt == UCI_MT_CMD && gid == UCI_GID_SESSION_CONTROL && oid == UCI_MSG_SESSION_START) {

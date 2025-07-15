@@ -70,7 +70,7 @@ void phNxpUciHal_handle_set_calibration(uint8_t *p_data, size_t data_len);
 void phNxpUciHal_extcal_handle_coreinit(void);
 void phNxpUciHal_process_response();
 void phNxpUciHal_handle_set_country_code(const char country_code[2]);
-bool phNxpUciHal_handle_set_app_config(size_t *data_len, uint8_t *p_data);
+bool phNxpUciHal_handle_set_app_config(size_t data_len, const uint8_t* p_data);
 
 // Handles CORE_GET_CAPS_INFO_RSP
 // Returns true if the packet is patched / reported to upper layer.
