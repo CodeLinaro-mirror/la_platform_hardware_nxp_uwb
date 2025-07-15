@@ -323,7 +323,6 @@ void report_uci_message(const uint8_t* buffer, size_t len);
 tHAL_UWB_STATUS phNxpUciHal_uwb_reset();
 tHAL_UWB_STATUS phNxpUciHal_process_ext_cmd_rsp(size_t cmd_len, const uint8_t *p_cmd);
 void phNxpUciHal_send_dev_error_status_ntf();
-bool phNxpUciHal_hook_cmd(size_t cmdlen, const uint8_t* cmd);
 
 // RX packet handler
 // handler should returns true if the packet is handled and

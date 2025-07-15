@@ -85,11 +85,6 @@ tHAL_UWB_STATUS phNxpUciHal_process_ext_cmd_rsp(size_t cmd_len,
   uint8_t gid = p_cmd[0] & UCI_GID_MASK;
   uint8_t oid = p_cmd[1] & UCI_OID_MASK;
 
-  /* Vendor Specific Parsing logic */
-  if (phNxpUciHal_hook_cmd(cmd_len, p_cmd)) {
-    return UWBSTATUS_SUCCESS;
-  }
-
   tHAL_UWB_STATUS status = UWBSTATUS_FAILED;
   int nr_retries = 0;
   int nr_timedout = 0;

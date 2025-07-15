@@ -276,7 +276,7 @@ static void phNxpUciHal_client_thread(phNxpUciHal_Control_t* p_nxpucihal_ctrl)
  * Returns          It returns true if the incoming command to be skipped.
  *
  ******************************************************************************/
-bool phNxpUciHal_hook_cmd(size_t cmdlen, const uint8_t* cmd)
+static bool phNxpUciHal_hook_cmd(size_t cmdlen, const uint8_t* cmd)
 {
   if (cmdlen < UCI_MSG_HDR_SIZE) {
     return false;
@@ -432,7 +432,15 @@ int32_t phNxpUciHal_write(size_t data_len, const uint8_t* p_data) {
 
   CONCURRENCY_LOCK();
 
-  auto status = phNxpUciHal_process_ext_cmd_rsp(data_len, p_data);
+  tHAL_UWB_STATUS status;
+
+  /* Vendor Specific Parsing logic */
+  if (phNxpUciHal_hook_cmd(data_len, p_data)) {
+    status = UWBSTATUS_SUCCESS;
+  } else {
+    status = phNxpUciHal_process_ext_cmd_rsp(data_len, p_data);
+  }
+
   CONCURRENCY_UNLOCK();
 
   /* No data written */
