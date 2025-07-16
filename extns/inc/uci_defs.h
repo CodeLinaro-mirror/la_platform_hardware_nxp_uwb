@@ -72,14 +72,15 @@
 /**********************************************
  * UCI Core Group-0: Opcodes and size of commands
  **********************************************/
-#define UCI_MSG_CORE_DEVICE_STATUS_NTF 1
-#define UCI_MSG_CORE_DEVICE_INFO 2
-#define UCI_MSG_CORE_GET_CAPS_INFO 3
-#define UCI_MSG_CORE_GET_CAPS_INFO_NR_OFFSET  5
-#define UCI_MSG_CORE_GET_CAPS_INFO_TLV_OFFSET 6
-
-#define UCI_MSG_CORE_SET_CONFIG 4
-#define UCI_MSG_CORE_GENERIC_ERROR_NTF 7
+#define UCI_MSG_CORE_DEVICE_STATUS_NTF          1
+#define UCI_MSG_CORE_DEVICE_INFO                2
+#define UCI_MSG_CORE_GET_CAPS_INFO              3
+#define UCI_MSG_CORE_SET_CONFIG                 4
+#define UCI_MSG_CORE_GET_CAPS_INFO_NR_OFFSET    5
+#define UCI_MSG_CORE_GET_CAPS_INFO_TLV_OFFSET   6
+#define UCI_MSG_CORE_GENERIC_ERROR_NTF          7
+#define UCI_MSG_CORE_QUERY_UWBS_TIMESTAMP       8
+#define UCI_MSG_CORE_QUERY_UWBS_TIMESTAMP_RSP_LEN  13
 
 /*********************************************************
  * UCI session config Group-1: Opcodes and size of command
@@ -131,7 +132,10 @@ constexpr uint8_t kSessionType_AliroRanging = 0xA2;
 /**********************************************************
  * UCI Android Vendor Group-C: Opcodes and size of commands
  **********************************************************/
-#define UCI_MSG_ANDROID_SET_COUNTRY_CODE 0x01
+#define UCI_MSG_ANDROID_SET_COUNTRY_CODE            0x01
+#define UCI_MSG_ANDROID_TIMESTAMP_ANCHOR_TO_UWBS    0x03
+#define UCI_MSG_ANDROID_TIMESTAMP_ANCHOR_TO_UWBS_CMD_LEN  20  // header 4 + system-time 8 + ble-time 8
+#define UCI_MSG_ANDROID_TIMESTAMP_ANCHOR_TO_UWBS_CMD_OFFSET_SYSTEM  4
 
 /**********************************************
  * UWB Prop Group Opcode-E Opcodes

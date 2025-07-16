@@ -42,6 +42,7 @@
 #include "phNxpConfig.h"
 #include "phNxpUciHal_utils.h"
 #include "sessionTrack.h"
+#include "timeSync.h"
 
 using namespace std;
 using android::base::StringPrintf;
@@ -316,6 +317,9 @@ static bool phNxpUciHal_hook_cmd(size_t cmdlen, const uint8_t* cmd)
   } else if (gid == UCI_GID_SESSION_CONTROL && oid == UCI_MSG_SESSION_START) {
     SessionTrack_onSessionStart(cmdlen, cmd);
     return false;
+  } else if (gid == UCI_GID_ANDROID && oid == UCI_MSG_ANDROID_TIMESTAMP_ANCHOR_TO_UWBS) {
+    TimeSync_onConvertTimestamp(cmdlen, cmd);
+    return true;
   }
   return false;
 }
@@ -1058,6 +1062,8 @@ tHAL_UWB_STATUS phNxpUciHal_coreInitialization()
     nxpucihal_ctrl.pClientMq->send(std::make_shared<phLibUwb_Message>(UCI_HAL_ERROR_MSG));
     return status;
   }
+
+  TimeSync_init();
 
   // report to upper-layer
   nxpucihal_ctrl.pClientMq->send(std::make_shared<phLibUwb_Message>(UCI_HAL_INIT_CPLT_MSG));
