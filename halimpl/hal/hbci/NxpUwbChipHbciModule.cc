@@ -1,3 +1,7 @@
+#include <algorithm>
+#include <functional>
+#include <iterator>
+#include <memory>
 #include <optional>
 #include <string_view>
 #include <vector>
