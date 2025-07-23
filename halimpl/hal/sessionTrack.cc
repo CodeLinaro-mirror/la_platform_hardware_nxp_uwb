@@ -293,27 +293,7 @@ public:
     QueueSessionTrackWork(SessionTrackWorkType::REFRESH_IDLE);
   }
 
-  void OnSessionStart(size_t packet_len, const uint8_t *packet) {
-    if (packet_len != UCI_MSG_SESSION_START_CMD_LENGTH)
-      return;
-
-    uint32_t session_handle = le_bytes_to_cpu<uint32_t>(&packet[UCI_MSG_SESSION_START_HANDLE_OFFSET]);
-    std::shared_ptr<SessionInfo> pSessionInfo = GetSessionInfo(session_handle);
-
-    // Check STS_INDEX and fetch if it was not set by upper-layer
-    if (!pSessionInfo) {
-      NXPLOG_UCIHAL_E("Unrecognized session start detected, handle=0x%x", session_handle);
-      pSessionInfo = AddNewSession(session_handle, kUnknownSessionId, kUnknownSessionType);
-    }
-
-    NXPLOG_UCIHAL_D("SessionTrack: session start, handle=0x%x "
-      "channel=%u max_rr=%d max_meas=%d",
-      session_handle, pSessionInfo->config.get_channel(),
-      pSessionInfo->config.get_max_rr_retry(),
-      pSessionInfo->config.get_max_measurements());
-
-    pSessionInfo->deinit_delayed_ = false;
-
+  void OverrideStsIndex(std::shared_ptr<SessionInfo> pSessionInfo) {
     if (!override_sts_index_for_ccc_) {
       return; /* Not needed / used... */
     }
@@ -322,6 +302,8 @@ public:
     if (pSessionInfo->session_type_ != kSessionType_CCCRanging) {
       return;
     }
+
+    const uint32_t session_handle = pSessionInfo->session_handle_;
 
     auto result = QueryStsIndex(session_handle);
     if (!result.first) {
@@ -353,6 +335,30 @@ public:
       uint32_t new_sts_index = (result.second + 1) & ((1 << 30) - 1);
       SetStsIndex(session_handle, new_sts_index);
     }
+  }
+
+  void OnSessionStart(size_t packet_len, const uint8_t *packet) {
+    if (packet_len != UCI_MSG_SESSION_START_CMD_LENGTH)
+      return;
+
+    uint32_t session_handle = le_bytes_to_cpu<uint32_t>(&packet[UCI_MSG_SESSION_START_HANDLE_OFFSET]);
+    std::shared_ptr<SessionInfo> pSessionInfo = GetSessionInfo(session_handle);
+
+    // Check STS_INDEX and fetch if it was not set by upper-layer
+    if (!pSessionInfo) {
+      NXPLOG_UCIHAL_E("Unrecognized session start detected, handle=0x%x", session_handle);
+      pSessionInfo = AddNewSession(session_handle, kUnknownSessionId, kUnknownSessionType);
+    }
+
+    NXPLOG_UCIHAL_D("SessionTrack: session start, handle=0x%x "
+      "channel=%u max_rr=%d max_meas=%d",
+      session_handle, pSessionInfo->config.get_channel(),
+      pSessionInfo->config.get_max_rr_retry(),
+      pSessionInfo->config.get_max_measurements());
+
+    pSessionInfo->deinit_delayed_ = false;
+
+    OverrideStsIndex(pSessionInfo);
   }
 
   // Called by upper-layer's SESSION_STOP_CMD handler
