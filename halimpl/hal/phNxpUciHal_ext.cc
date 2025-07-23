@@ -850,9 +850,7 @@ bool phNxpUciHal_handle_set_app_config(size_t packet_len, const uint8_t* packet)
 
   const uint32_t session_handle =
     le_bytes_to_cpu<uint32_t>(&packet[UCI_MSG_SESSION_SET_APP_CONFIG_HANDLE_OFFSET]);
-  std::optional<uint8_t> param_channel;
-  std::optional<int> param_max_rr_retry;
-  std::optional<int> param_max_number_or_measurements;
+  SessionAppConfig config;
 
   // 9 = Header 4 + SessionID 4 + NumOfConfigs 1
   uint8_t i = 9;
@@ -878,7 +876,7 @@ bool phNxpUciHal_handle_set_app_config(size_t packet_len, const uint8_t* packet)
         tlv_len == UCI_PARAM_ID_CHANNEL_NUMBER_LENGTH) {
       static_assert(sizeof(uint8_t) == UCI_PARAM_ID_CHANNEL_NUMBER_LENGTH);
       uint8_t ch = *value_ptr;
-      param_channel = ch;
+      config.channel = ch;
 
       if (((ch == CHANNEL_NUM_5) && (rt_set->restricted_channel_mask & (1 << 5))) ||
           ((ch == CHANNEL_NUM_9) && (rt_set->restricted_channel_mask & (1 << 9)))) {
@@ -896,17 +894,16 @@ bool phNxpUciHal_handle_set_app_config(size_t packet_len, const uint8_t* packet)
     } else if (tlv_tag == UCI_PARAM_ID_MAX_RR_RETRY &&
                tlv_len == UCI_PARAM_ID_MAX_RR_RETRY_LENGTH) {
       static_assert(sizeof(uint16_t) == UCI_PARAM_ID_MAX_RR_RETRY_LENGTH);
-      param_max_rr_retry = le_bytes_to_cpu<uint16_t>(value_ptr);
+      config.max_rr_retry = le_bytes_to_cpu<uint16_t>(value_ptr);
     } else if (tlv_tag == UCI_PARAM_ID_MAX_NUMBER_OF_MEASUREMENT &&
                tlv_len == UCI_PARAM_ID_MAX_NUMBER_OF_MEASUREMENT_LENGTH) {
       static_assert(sizeof(uint16_t) == UCI_PARAM_ID_MAX_NUMBER_OF_MEASUREMENT_LENGTH);
-      param_max_number_or_measurements = le_bytes_to_cpu<uint16_t>(value_ptr);
+      config.max_measurements = le_bytes_to_cpu<uint16_t>(value_ptr);
     }
     i += param_len;
   }
 
-  SessionTrack_onAppConfig(session_handle,
-    param_channel, param_max_rr_retry, param_max_number_or_measurements);
+  SessionTrack_onAppConfig(session_handle, config);
 
   return false;
 }
