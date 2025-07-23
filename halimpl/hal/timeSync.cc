@@ -21,44 +21,6 @@ constexpr uint64_t kSystemTimeMaxLatencyUs = 5000 * 1000;
 // Max uncertainty from querying uwb timestamp.
 constexpr uint64_t kUwbsTimeMaxLatencyUs = 1000 * 1000;
 
-// Returns the UWBS timestamp in micro seconds.
-std::optional<uint64_t> GetUwbsTimeStamp() {
-  std::optional<uint64_t> timestamp;
-
-  phNxpUciHal_rx_handler_add(UCI_MT_RSP, UCI_GID_CORE,
-    UCI_MSG_CORE_QUERY_UWBS_TIMESTAMP, /*run_once=*/true,
-    [&timestamp](size_t packet_len, const uint8_t *packet) -> bool {
-      if (packet_len != UCI_MSG_CORE_QUERY_UWBS_TIMESTAMP_RSP_LEN) {
-        NXPLOG_UCIHAL_E("TimeSync: Failed to decode CORE_QUERY_UWBS_TIMESTAMP_RSP");
-        return true;
-      }
-
-      if (packet[4] != UWBSTATUS_SUCCESS) {
-        NXPLOG_UCIHAL_E("TimeSync: Failed to get UWBS timestamp.");
-        return true;
-      }
-      timestamp = le_bytes_to_cpu<uint32_t>(&packet[5]);
-      return true;
-    }
-  );
-
-  std::vector<uint8_t> packet {
-    (UCI_MT_CMD << UCI_MT_SHIFT) | UCI_GID_CORE,
-    UCI_MSG_CORE_QUERY_UWBS_TIMESTAMP,
-    0, 0
-  };
-
-  phNxpUciHal_send_ext_cmd(packet.size(), packet.data());
-  return timestamp;
-}
-
-// Returns system time in micro seconds.
-uint64_t GetSystemTime() {
-  struct timespec ts;
-  ::clock_gettime(CLOCK_BOOTTIME, &ts);
-  return (ts.tv_sec * 1000000ull) + (ts.tv_nsec / 1000ull);
-}
-
 struct UwbTimestamp {
   uint8_t status;
   uint64_t timestamp_us;
@@ -124,6 +86,42 @@ UwbTimestamp ConvertTimestamp(const uint64_t system_time_base)
 }
 
 }   // namespace
+
+uint64_t GetSystemTime() {
+  struct timespec ts;
+  ::clock_gettime(CLOCK_BOOTTIME, &ts);
+  return (ts.tv_sec * 1000000ull) + (ts.tv_nsec / 1000ull);
+}
+
+std::optional<uint64_t> GetUwbsTimeStamp() {
+  std::optional<uint64_t> timestamp;
+
+  phNxpUciHal_rx_handler_add(UCI_MT_RSP, UCI_GID_CORE,
+    UCI_MSG_CORE_QUERY_UWBS_TIMESTAMP, /*run_once=*/true,
+    [&timestamp](size_t packet_len, const uint8_t *packet) -> bool {
+      if (packet_len != UCI_MSG_CORE_QUERY_UWBS_TIMESTAMP_RSP_LEN) {
+        NXPLOG_UCIHAL_E("TimeSync: Failed to decode CORE_QUERY_UWBS_TIMESTAMP_RSP");
+        return true;
+      }
+
+      if (packet[4] != UWBSTATUS_SUCCESS) {
+        NXPLOG_UCIHAL_E("TimeSync: Failed to get UWBS timestamp.");
+        return true;
+      }
+      timestamp = le_bytes_to_cpu<uint64_t>(&packet[5]);
+      return true;
+    }
+  );
+
+  std::vector<uint8_t> packet {
+    (UCI_MT_CMD << UCI_MT_SHIFT) | UCI_GID_CORE,
+    UCI_MSG_CORE_QUERY_UWBS_TIMESTAMP,
+    0, 0
+  };
+
+  phNxpUciHal_send_ext_cmd(packet.size(), packet.data());
+  return timestamp;
+}
 
 void TimeSync_init()
 {

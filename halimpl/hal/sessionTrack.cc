@@ -1,6 +1,7 @@
 #include <atomic>
 #include <bit>
 #include <chrono>
+#include <cinttypes>
 #include <condition_variable>
 #include <functional>
 #include <memory>
@@ -18,6 +19,7 @@
 #include "phNxpUciHal_ext.h"
 #include "phNxpUciHal_utils.h"
 #include "sessionTrack.h"
+#include "timeSync.h"
 
 extern phNxpUciHal_Control_t nxpucihal_ctrl;
 
@@ -102,11 +104,13 @@ private:
     SESSION_DEINIT,
     STOP,
   };
+
   enum class PowerState {
     SUSPEND = 0,
     IDLE,
     ACTIVE,
   };
+
   struct SessionTrackMsg {
     SessionTrackWorkType type_;
     std::shared_ptr<SessionInfo> session_info_;
@@ -123,7 +127,9 @@ private:
         : type_(type), session_info_(session_info), sync_(sync),
           cond_flag(false) {}
   };
+
   static constexpr unsigned long kAutoSuspendTimeoutDefaultMs_ = (30 * 1000);
+  static constexpr unsigned long kCccInjectUwbInitTimeLatencyMs = 300;
   static constexpr long kQueueTimeoutMs = 2000;
   static constexpr long kUrskDeleteNtfTimeoutMs = 500;
 
@@ -136,14 +142,19 @@ private:
   std::unordered_map<uint32_t, std::shared_ptr<SessionInfo>> sessions_;
   std::mutex sessions_lock_;
 
+  // configuration parameters
   bool auto_suspend_enabled_;
+  uint32_t idle_timeout_ms_;
   bool delete_ursk_ccc_enabled_;
   bool delete_ursk_aliro_enabled_;
+  bool override_sts_index_for_ccc_;
+  bool ccc_inject_uwb_init_time_enabled_;
+  uint64_t ccc_inject_uwb_init_time_latency_us_;
+
   bool calibration_delayed_;
+
   std::atomic<PowerState> power_state_;
   bool idle_timer_started_;
-  uint32_t idle_timeout_ms_;
-  bool override_sts_index_for_ccc_;
 
   std::thread worker_thread_;
   std::mutex sync_mutex_;
@@ -165,6 +176,15 @@ public:
 
     delete_ursk_aliro_enabled_ =
         NxpConfig_GetBool(NAME_DELETE_URSK_FOR_ALIRO_SESSION).value_or(false);
+
+    ccc_inject_uwb_init_time_enabled_ =
+        NxpConfig_GetBool(NAME_CCC_INJECT_UWB_INIT_TIME).value_or(false);
+
+    if (ccc_inject_uwb_init_time_enabled_) {
+      ccc_inject_uwb_init_time_latency_us_ = NxpConfig_GetNum<uint64_t>(
+        NAME_CCC_INJECT_UWB_INIT_TIME_LATENCY_MS).value_or(kCccInjectUwbInitTimeLatencyMs);
+      ccc_inject_uwb_init_time_latency_us_ *= 1000;
+    }
 
     // Default on
     override_sts_index_for_ccc_ =
@@ -293,7 +313,7 @@ public:
     QueueSessionTrackWork(SessionTrackWorkType::REFRESH_IDLE);
   }
 
-  void OverrideStsIndex(std::shared_ptr<SessionInfo> pSessionInfo) {
+  void OverrideCccStsIndex(std::shared_ptr<SessionInfo> pSessionInfo) {
     if (!override_sts_index_for_ccc_) {
       return; /* Not needed / used... */
     }
@@ -319,7 +339,7 @@ public:
 
     if (!pSessionInfo->ranging_started_) {
       // first ranging
-      NXPLOG_UCIHAL_D("SessionTrack: session handle 0x%x has zero sts_index0, fetch it", session_handle);
+      NXPLOG_UCIHAL_D("SessionTrack: session handle 0x%x has zero sts_index0, inject a random value", session_handle);
       uint32_t new_sts_index = PickRandomStsIndex();
       SetStsIndex(session_handle, new_sts_index);
     } else {
@@ -334,6 +354,35 @@ public:
       // increment it from last sts_index (just +1)
       uint32_t new_sts_index = (result.second + 1) & ((1 << 30) - 1);
       SetStsIndex(session_handle, new_sts_index);
+    }
+  }
+
+  void OverrideCccUwbTime0(std::shared_ptr<SessionInfo> pSessionInfo) {
+    if (!ccc_inject_uwb_init_time_enabled_)
+      return;
+
+    // Upper-layer specified the UWB_TIME_0.
+    if (pSessionInfo->config.uwb_init_time.has_value())
+      return;
+
+    uint64_t system_time_0 = GetSystemTime();
+
+    std::optional<uint64_t> uwb_time = GetUwbsTimeStamp();
+
+    uint64_t system_time_1 = GetSystemTime();
+
+    if (!uwb_time.has_value())
+      return;
+
+    const uint64_t elapsed = system_time_1 - system_time_0;
+
+    const uint64_t timestamp = uwb_time.value() + elapsed + ccc_inject_uwb_init_time_latency_us_;
+
+    NXPLOG_UCIHAL_D("Inject CCC UWB_TIME_0 %" PRIu64 "(%" PRIu64 " + %" PRIu64 " + %" PRIu64 ")",
+      timestamp, uwb_time.value(), ccc_inject_uwb_init_time_latency_us_, elapsed);
+
+    if (!SetUwbInitTime(pSessionInfo->session_handle_, timestamp)) {
+      NXPLOG_UCIHAL_E("Failed to inject UWB_TIME_0.");
     }
   }
 
@@ -358,7 +407,9 @@ public:
 
     pSessionInfo->deinit_delayed_ = false;
 
-    OverrideStsIndex(pSessionInfo);
+    OverrideCccStsIndex(pSessionInfo);
+
+    OverrideCccUwbTime0(pSessionInfo);
   }
 
   // Called by upper-layer's SESSION_STOP_CMD handler
@@ -690,6 +741,34 @@ private:
     auto ret = phNxpUciHal_send_ext_cmd(packet.size(), packet.data());
     if (ret != UWBSTATUS_SUCCESS) {
       NXPLOG_UCIHAL_E("SessionTrack: Failed to SetStsIndex");
+      return false;
+    }
+    return true;
+  }
+
+  bool SetUwbInitTime(uint32_t session_handle, uint64_t timestamp)
+  {
+    uint8_t session_handle_bytes[4];
+    uint8_t timestamp_bytes[8];
+
+    static_assert(sizeof(timestamp_bytes) == UCI_PARAM_ID_UWB_INIT_TIME_LENGTH);
+
+    cpu_to_le_bytes(session_handle_bytes, session_handle);
+    cpu_to_le_bytes(timestamp_bytes, timestamp);
+
+    std::vector<uint8_t> packet{(UCI_MT_CMD << UCI_MT_SHIFT) | UCI_GID_SESSION_MANAGE,
+      UCI_MSG_SESSION_SET_APP_CONFIG, 0,  0};
+
+    packet.insert(packet.end(), std::begin(session_handle_bytes), std::end(session_handle_bytes));
+    packet.push_back(1);  // Num of Prameters
+    packet.push_back(UCI_PARAM_ID_UWB_INIT_TIME);  // The parameter. STS Index
+    packet.push_back(UCI_PARAM_ID_UWB_INIT_TIME_LENGTH);  // Sts Index Size...
+    packet.insert(packet.end(), std::begin(timestamp_bytes), std::end(timestamp_bytes));
+    packet[UCI_PAYLOAD_LENGTH_OFFSET] = packet.size() - UCI_MSG_HDR_SIZE;
+
+    auto ret = phNxpUciHal_send_ext_cmd(packet.size(), packet.data());
+    if (ret != UWBSTATUS_SUCCESS) {
+      NXPLOG_UCIHAL_E("SessionTrack: Failed to inject UWB_INIT_TIME.");
       return false;
     }
     return true;

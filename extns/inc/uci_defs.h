@@ -113,13 +113,6 @@
 #define UCI_MSG_SESSION_SET_APP_CONFIG_HANDLE_OFFSET  4
 #define UCI_MSG_SESSION_GET_APP_CONFIG                4
 
-// Parameter Tags
-#define UCI_APP_CONFIG_FIRA_STS_INDEX                 0x0A
-#define UCI_APP_CONFIG_CCC_LAST_STS_INDEX_USED        0xA8
-
-#define UCI_MSG_SESSION_QUERY_DATA_SIZE               0x0B
-#define UCI_MSG_SESSION_QUERY_DATA_SIZE_STATUS_OFFSET 8
-
 // Session Type field in SESSION_INIT_CMD
 constexpr uint8_t kSessionType_Ranging = 0x00;
 constexpr uint8_t kSessionType_RangingAndData = 0x01;
@@ -179,13 +172,16 @@ constexpr uint8_t kSessionType_AliroRanging = 0xA2;
  ************************************************/
 #define UCI_PARAM_ID_CHANNEL_NUMBER                     0x04
 #define UCI_PARAM_ID_CHANNEL_NUMBER_LENGTH              1
-#define UCI_PARAM_ID_TX_ADAPTIVE_PAYLOAD_POWER          0x1C  /* 2.0.0-0.9r4 CR-1038 removed this */
+#define UCI_APP_CONFIG_FIRA_STS_INDEX                   0x0A
 #define UCI_PARAM_ID_MAX_RR_RETRY                       0x2A
 #define UCI_PARAM_ID_MAX_RR_RETRY_LENGTH                2
+#define UCI_PARAM_ID_UWB_INIT_TIME                      0x2B
+#define UCI_PARAM_ID_UWB_INIT_TIME_LENGTH               8
 #define UCI_PARAM_ID_IN_BAND_TERMINATION_ATTEMPT_COUNT  0x2F
 #define UCI_PARAM_ID_IN_BAND_TERMINATION_ATTEMPT_COUNT_LENGTH   1
 #define UCI_PARAM_ID_MAX_NUMBER_OF_MEASUREMENT          0x32
 #define UCI_PARAM_ID_MAX_NUMBER_OF_MEASUREMENT_LENGTH   2
+#define UCI_APP_CONFIG_CCC_LAST_STS_INDEX_USED          0xA8
 #define UCI_PARAM_ID_AOA_AZIMUTH_MEASUREMENTS           0xE3
 #define UCI_PARAM_ID_AOA_ELEVATION_MEASUREMENTS         0xE4
 #define UCI_PARAM_ID_RANGE_MEASUREMENTS                 0xE5

@@ -7,6 +7,7 @@
 struct SessionAppConfig {
   std::optional<uint8_t> channel;
   std::optional<int> max_rr_retry;
+  std::optional<uint64_t> uwb_init_time;
   std::optional<int> max_measurements;
 
   void Append(const SessionAppConfig& config) {
@@ -14,6 +15,8 @@ struct SessionAppConfig {
       channel = config.channel.value();
     if (config.max_rr_retry.has_value())
       max_rr_retry = config.max_rr_retry.value();
+    if (config.uwb_init_time.has_value())
+      uwb_init_time = config.uwb_init_time.value();
     if (config.max_measurements.has_value())
       max_measurements = config.max_measurements.value();
   }
@@ -25,6 +28,10 @@ struct SessionAppConfig {
 
   int get_max_rr_retry() const {
     return max_rr_retry.value_or(0);
+  }
+
+  uint64_t get_uwb_init_time() const {
+    return uwb_init_time.value_or(0);
   }
 
   int get_max_measurements() const {

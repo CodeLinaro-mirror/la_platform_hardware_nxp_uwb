@@ -900,6 +900,10 @@ bool phNxpUciHal_handle_set_app_config(size_t packet_len, const uint8_t* packet)
                tlv_len == UCI_PARAM_ID_MAX_NUMBER_OF_MEASUREMENT_LENGTH) {
       static_assert(sizeof(uint16_t) == UCI_PARAM_ID_MAX_NUMBER_OF_MEASUREMENT_LENGTH);
       config.max_measurements = le_bytes_to_cpu<uint16_t>(value_ptr);
+    } else if (tlv_tag == UCI_PARAM_ID_UWB_INIT_TIME &&
+               tlv_len == UCI_PARAM_ID_UWB_INIT_TIME_LENGTH) {
+      static_assert(sizeof(uint64_t) == UCI_PARAM_ID_UWB_INIT_TIME_LENGTH);
+      config.uwb_init_time = le_bytes_to_cpu<uint64_t>(value_ptr);
     }
     i += param_len;
   }

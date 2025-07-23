@@ -116,6 +116,12 @@ std::vector<std::string> NxpConfig_GetStrArray(std::string_view key, bool includ
 /* In case the HAL has to set STS index for CCC */
 #define NAME_OVERRIDE_STS_INDEX_FOR_CCC_SESSION    "OVERRIDE_STS_INDEX_FOR_CCC_SESSION"
 
+// Inject UWB_INITIATION_TIME (UWB_TIME_0) when it's unset.
+#define NAME_CCC_INJECT_UWB_INIT_TIME   "CCC_INJECT_UWB_INIT_TIME"
+
+// Additional latency injected to UWB_TIME_0
+#define NAME_CCC_INJECT_UWB_INIT_TIME_LATENCY_MS   "CCC_INJECT_UWB_INIT_TIME_LATENCY_MS"
+
 /* default configuration */
 #define default_storage_location "/data/vendor/uwb"
 
