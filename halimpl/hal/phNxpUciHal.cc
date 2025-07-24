@@ -690,13 +690,13 @@ tHAL_UWB_STATUS phNxpUciHal_close() {
   nxpucihal_ctrl.pClientMq->send(std::make_shared<phLibUwb_Message>(UCI_HAL_CLOSE_CPLT_MSG));
   nxpucihal_ctrl.client_thread.join();
 
+  phNxpUciHal_hw_deinit();
+
   phTmlUwb_Shutdown();
 
   nxpucihal_ctrl.halStatus = HAL_STATUS_CLOSE;
 
   CONCURRENCY_UNLOCK();
-
-  phNxpUciHal_hw_deinit();
 
   phNxpUciHal_rx_handler_destroy();
 
