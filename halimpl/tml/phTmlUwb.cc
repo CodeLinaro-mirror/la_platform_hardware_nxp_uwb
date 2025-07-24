@@ -14,13 +14,15 @@
  * limitations under the License.
  */
 
+#include <atomic>
+#include <cerrno>
+
 #include <phNxpLog.h>
 #include <phNxpUciHal_utils.h>
 #include <phOsalUwb_Timer.h>
 #include <phTmlUwb.h>
 #include <phTmlUwb_spi.h>
 #include <phNxpUciHal.h>
-#include <errno.h>
 
 /*
  * Duration of Timer to wait after sending an Uci packet
@@ -35,31 +37,29 @@
 
 namespace {
 
-// Structure containing details related to read and write operations
-struct phTmlUwb_ReadInfo {
-  volatile bool bThreadShouldStop;
-  volatile bool bThreadRunning;
-  uint8_t
-      bThreadBusy; /*Flag to indicate thread is busy on respective operation */
-  /* Transaction completion Callback function */
-  ReadCallback* pThread_Callback;
-  void* pContext;        /*Context passed while invocation of operation */
-  uint8_t* pBuffer;      /*Buffer passed while invocation of operation */
-  size_t wLength;      /*Length of data read/written */
-  tHAL_UWB_STATUS wWorkStatus; /*Status of the transaction performed */
+struct phTmlUwb_ThreadInfo {
+  std::atomic_bool bThreadShouldStop;
+  std::atomic_bool bThreadRunning;
+  std::atomic_bool bThreadBusy;
 };
 
-struct phTmlUwb_WriteInfo {
-  volatile bool bThreadShouldStop;
-  volatile bool bThreadRunning;
-  uint8_t
-      bThreadBusy; /*Flag to indicate thread is busy on respective operation */
-  /* Transaction completion Callback function */
+// Structure containing details related to read and write operations
+struct phTmlUwb_ReadInfo : phTmlUwb_ThreadInfo {
+  // Transaction completion Callback function
+  ReadCallback* pThread_Callback;
+
+  void* pContext;           // Context passed while invocation of operation
+  uint8_t* pBuffer;         // Buffer passed while invocation of operation
+  size_t wLength;           // Length of data read/written
+};
+
+struct phTmlUwb_WriteInfo : phTmlUwb_ThreadInfo {
+  // Transaction completion Callback function
   WriteCallback* pThread_Callback;
-  void* pContext;        /*Context passed while invocation of operation */
-  const uint8_t* pBuffer;      /*Buffer passed while invocation of operation */
-  size_t wLength;      /*Length of data read/written */
-  tHAL_UWB_STATUS wWorkStatus; /*Status of the transaction performed */
+
+  void* pContext;           // Context passed while invocation of operation
+  const uint8_t* pBuffer;   // Buffer passed while invocation of operation
+  size_t wLength;           // Length of data read/written
 };
 
 // Base Context Structure containing members required for entire session
@@ -192,7 +192,10 @@ static void* phTmlUwb_TmlReaderThread(void* pParam)
      by the callback thread */
   static phLibUwb_DeferredCall_t tDeferredInfo;
 
-  gpphTmlUwb_Context->tReadInfo.bThreadRunning = true;
+  if (gpphTmlUwb_Context->tReadInfo.bThreadRunning.exchange(true)) {
+    NXPLOG_TML_E("TmlReader: Thread already started.");
+    return nullptr;
+  }
   NXPLOG_TML_D("TmlReader: Thread Started");
 
   /* Writer thread loop shall be running till shutdown is invoked */
@@ -300,7 +303,10 @@ static void* phTmlUwb_TmlWriterThread(void* pParam)
      by the callback thread */
   static phLibUwb_DeferredCall_t tDeferredInfo;
 
-  gpphTmlUwb_Context->tWriteInfo.bThreadRunning = true;
+  if (gpphTmlUwb_Context->tWriteInfo.bThreadRunning.exchange(true)) {
+    NXPLOG_TML_E("TmlWriter: Thread already started.");
+    return nullptr;
+  }
   NXPLOG_TML_D("TmlWriter: Thread Started");
 
   /* Writer thread loop shall be running till shutdown is invoked */
@@ -490,16 +496,18 @@ tHAL_UWB_STATUS phTmlUwb_Write(const uint8_t* pBuffer, size_t wLength,
                          WriteCallback pTmlWriteComplete,
                          void* pContext) {
   /* Check whether TML is Initialized */
-  if (gpphTmlUwb_Context == nullptr) {
+  if (gpphTmlUwb_Context == nullptr || gpphTmlUwb_Context->pDevHandle == nullptr) {
+    NXPLOG_TML_E("Tml not initialized.");
     return UWBSTATUS_NOT_INITIALISED;
   }
 
-  if (gpphTmlUwb_Context->pDevHandle == nullptr || pBuffer == nullptr ||
-     wLength == 0 || pTmlWriteComplete == nullptr) {
+  if (pBuffer == nullptr || wLength == 0 || pTmlWriteComplete == nullptr) {
     return UWBSTATUS_INVALID_PARAMETER;
   }
 
-  if (gpphTmlUwb_Context->tWriteInfo.bThreadBusy) {
+  // Setting the flag marks beginning of a Write Operation .
+  if (gpphTmlUwb_Context->tWriteInfo.bThreadBusy.exchange(true)) {
+    NXPLOG_TML_E("Writer thread busy.");
     return UWBSTATUS_BUSY;
   }
 
@@ -510,8 +518,6 @@ tHAL_UWB_STATUS phTmlUwb_Write(const uint8_t* pBuffer, size_t wLength,
   }
   memcpy(buffer, pBuffer, wLength);
 
-  /* Setting the flag marks beginning of a Write Operation */
-  gpphTmlUwb_Context->tWriteInfo.bThreadBusy = true;
   gpphTmlUwb_Context->tWriteInfo.pBuffer = buffer;
   gpphTmlUwb_Context->tWriteInfo.wLength = wLength;
   gpphTmlUwb_Context->tWriteInfo.pThread_Callback = pTmlWriteComplete;
@@ -554,7 +560,8 @@ tHAL_UWB_STATUS phTmlUwb_StartRead(ReadCallback pTmlReadComplete, void* pContext
   static uint8_t shared_rx_buffer[UCI_MAX_DATA_LEN];
 
   /* Check whether TML is Initialized */
-  if (!gpphTmlUwb_Context || !gpphTmlUwb_Context->pDevHandle) {
+  if (gpphTmlUwb_Context == nullptr || gpphTmlUwb_Context->pDevHandle == nullptr) {
+    NXPLOG_TML_E("Tml not initialized.");
     return PHUWBSTVAL(CID_UWB_TML, UWBSTATUS_NOT_INITIALISED);
   }
 
@@ -595,21 +602,33 @@ tHAL_UWB_STATUS phTmlUwb_StartRead(ReadCallback pTmlReadComplete, void* pContext
 void phTmlUwb_StopRead()
 {
   NXPLOG_TML_D("StopRead");
-  gpphTmlUwb_Context->tReadInfo.bThreadShouldStop = true;
 
-  if (gpphTmlUwb_Context->tReadInfo.bThreadRunning) {
-    // to wakeup from blocking read()
-    phTmlUwb_Spi_Ioctl(gpphTmlUwb_Context->pDevHandle, phTmlUwb_ControlCode_t::SetPower, ABORT_READ_PENDING);
-    sem_post(&gpphTmlUwb_Context->rxSemaphore);
-
-    if (pthread_join(gpphTmlUwb_Context->readerThread, NULL)) {
-      NXPLOG_TML_E("[%s] pthread_join failed for reader thread at line: %d ", __func__, __LINE__);
-    }
-    if (gpphTmlUwb_Context->tReadInfo.bThreadRunning) {
-      NXPLOG_TML_E("Failed to terminate read thread.");
-    }
-    sem_destroy(&gpphTmlUwb_Context->rxSemaphore);
+  if (gpphTmlUwb_Context == nullptr || gpphTmlUwb_Context->pDevHandle == nullptr) {
+    NXPLOG_TML_E("Tml not initialzed.");
+    return;
   }
+
+  if (gpphTmlUwb_Context->tReadInfo.bThreadShouldStop.exchange(true)) {
+    NXPLOG_TML_D("Reader thread already requested to be stopped.");
+    return;
+  }
+
+  if (!gpphTmlUwb_Context->tReadInfo.bThreadRunning) {
+    NXPLOG_TML_E("Reader thread requested stopped while already in stopped.");
+    return;
+  }
+
+  // to wakeup from blocking read()
+  phTmlUwb_Spi_Ioctl(gpphTmlUwb_Context->pDevHandle, phTmlUwb_ControlCode_t::SetPower, ABORT_READ_PENDING);
+  sem_post(&gpphTmlUwb_Context->rxSemaphore);
+
+  if (pthread_join(gpphTmlUwb_Context->readerThread, NULL)) {
+    NXPLOG_TML_E("[%s] pthread_join failed for reader thread at line: %d ", __func__, __LINE__);
+  }
+  if (gpphTmlUwb_Context->tReadInfo.bThreadRunning) {
+    NXPLOG_TML_E("Failed to terminate read thread.");
+  }
+  sem_destroy(&gpphTmlUwb_Context->rxSemaphore);
 }
 
 /*******************************************************************************
@@ -655,8 +674,14 @@ static tHAL_UWB_STATUS phTmlUwb_StartWriterThread(void)
 *******************************************************************************/
 static void phTmlUwb_StopWriterThread(void)
 {
+  NXPLOG_TML_D("StopWrite");
+
   gpphTmlUwb_Context->tWriteInfo.bThreadBusy = false;
-  gpphTmlUwb_Context->tWriteInfo.bThreadShouldStop = true;
+
+  if (gpphTmlUwb_Context->tWriteInfo.bThreadShouldStop.exchange(true)) {
+    NXPLOG_TML_D("Writer thread already requested to be stopped.");
+    return;
+  }
 
   if (gpphTmlUwb_Context->tWriteInfo.bThreadRunning) {
     sem_post(&gpphTmlUwb_Context->txSemaphore);
@@ -664,6 +689,8 @@ static void phTmlUwb_StopWriterThread(void)
     if (pthread_join(gpphTmlUwb_Context->writerThread, NULL)) {
       NXPLOG_TML_E("[%s] pthread_join failed for writer thread at line: %d ", __func__, __LINE__);
     }
+  } else {
+    NXPLOG_TML_E("Writer thread requested to be stopped while already in stopped.");
   }
 }
 
@@ -722,12 +749,10 @@ static void phTmlUwb_WriteDeferredCb(void* pParams) {
   /* Transaction info buffer to be passed to Callback Function */
   phTmlUwb_WriteTransactInfo* pTransactionInfo = (phTmlUwb_WriteTransactInfo*)pParams;
 
-  /* Reset the flag to accept another Write Request */
+  // Reset the flag to accept another Write Request
   gpphTmlUwb_Context->tWriteInfo.bThreadBusy = false;
   gpphTmlUwb_Context->tWriteInfo.pThread_Callback(
       gpphTmlUwb_Context->tWriteInfo.pContext, pTransactionInfo);
-
-  return;
 }
 
 /*******************************************************************************
@@ -829,16 +854,25 @@ static int phTmlUwb_WaitReadInit(void) {
 **
 *******************************************************************************/
 void phTmlUwb_Chip_Reset(void){
-  if (NULL != gpphTmlUwb_Context->pDevHandle) {
-    phTmlUwb_Spi_Ioctl(gpphTmlUwb_Context->pDevHandle, phTmlUwb_ControlCode_t::SetPower, 0);
-    usleep(1000);
-    phTmlUwb_Spi_Ioctl(gpphTmlUwb_Context->pDevHandle, phTmlUwb_ControlCode_t::SetPower, 1);
+
+  if (gpphTmlUwb_Context == nullptr || gpphTmlUwb_Context->pDevHandle == nullptr) {
+    NXPLOG_TML_E("Tml not initialzed.");
+    return;
   }
+
+  phTmlUwb_Spi_Ioctl(gpphTmlUwb_Context->pDevHandle, phTmlUwb_ControlCode_t::SetPower, 0);
+  usleep(1000);
+  phTmlUwb_Spi_Ioctl(gpphTmlUwb_Context->pDevHandle, phTmlUwb_ControlCode_t::SetPower, 1);
 }
 
 void phTmlUwb_Suspend(void)
 {
   NXPLOG_TML_D("Suspend");
+
+  if (gpphTmlUwb_Context == nullptr || gpphTmlUwb_Context->pDevHandle == nullptr) {
+    NXPLOG_TML_E("Tml not initialized.");
+  }
+
   phTmlUwb_Spi_Ioctl(gpphTmlUwb_Context->pDevHandle, phTmlUwb_ControlCode_t::SetPower, PWR_SUSPEND);
 
 }
@@ -846,5 +880,10 @@ void phTmlUwb_Suspend(void)
 void phTmlUwb_Resume(void)
 {
   NXPLOG_TML_D("Resume");
+
+  if (gpphTmlUwb_Context == nullptr || gpphTmlUwb_Context->pDevHandle == nullptr) {
+    NXPLOG_TML_E("Tml not initialized.");
+  }
+
   phTmlUwb_Spi_Ioctl(gpphTmlUwb_Context->pDevHandle, phTmlUwb_ControlCode_t::SetPower, PWR_RESUME);
 }
