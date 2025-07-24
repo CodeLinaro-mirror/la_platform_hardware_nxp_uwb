@@ -17,6 +17,7 @@
 #include "phNxpUciHal.h"
 #include "phNxpUciHal_ext.h"
 #include "phNxpUciHal_utils.h"
+#include "sessionTrack.h"
 
 extern phNxpUciHal_Control_t nxpucihal_ctrl;
 
@@ -72,9 +73,7 @@ private:
     uint8_t   session_state_;
 
     // App Configuration Parameters
-    uint8_t   channel_;
-    int       max_rr_retry_;
-    int       max_measurements_;
+    SessionAppConfig config;
 
     bool      ranging_started_;
     bool      deinit_delayed_;
@@ -84,16 +83,13 @@ private:
       session_handle_(session_handle),
       session_type_(session_type),
       session_state_(UCI_MSG_SESSION_STATE_UNDEFINED),
-      channel_(9),
-      max_rr_retry_(0),
-      max_measurements_(0),
       ranging_started_(false),
       deinit_delayed_(false) {
     }
 
     bool RequireDelayedDeinit() {
       return ranging_started_ &&
-             (max_measurements_ > 0 || max_rr_retry_ > 0);
+             (config.get_max_measurements() > 0 || config.get_max_rr_retry() > 0);
     }
   };
 
@@ -238,10 +234,7 @@ public:
   }
 
   // Called by upper-layer's SetAppConfig command handler
-  void OnSetAppConfig(uint32_t session_handle,
-                      std::optional<uint8_t> channel,
-                      std::optional<int> max_rr_retry,
-                      std::optional<int> max_measurements) {
+  void OnSetAppConfig(uint32_t session_handle, const SessionAppConfig& config) {
     // Update channel info
     auto pSessionInfo = GetSessionInfo(session_handle);
     if (!pSessionInfo) {
@@ -249,15 +242,11 @@ public:
       pSessionInfo = AddNewSession(session_handle, kUnknownSessionId, kUnknownSessionType);
     }
 
-    NXPLOG_UCIHAL_D("SessionTrack: handle=0x%x, channel=%u, (%d, %d)",
-                    session_handle, *channel,
-                    *max_rr_retry, *max_measurements);
-    if (channel)
-      pSessionInfo->channel_ = *channel;
-    if (max_measurements)
-      pSessionInfo->max_measurements_ = *max_measurements;
-    if (max_rr_retry)
-      pSessionInfo->max_rr_retry_ = *max_rr_retry;
+    pSessionInfo->config.Append(config);
+    NXPLOG_UCIHAL_D("SessionTrack: handle=0x%x, channel=%u, max_retry=%d, max_meas=%d",
+                    session_handle, pSessionInfo->config.get_channel(),
+                    pSessionInfo->config.get_max_rr_retry(),
+                    pSessionInfo->config.get_max_measurements());
   }
 
   // Called by upper-layer's SetCountryCode command handler,
@@ -279,7 +268,8 @@ public:
           continue;
         // there's active sessions existed, delay per-country calibrations
         calibration_delayed_ = true;
-        if (!rt_set->uwb_enable || rt_set->restricted_channel_mask & (1 << pSessionInfo->channel_)) {
+        if (!rt_set->uwb_enable ||
+            rt_set->restricted_channel_mask & (1 << pSessionInfo->config.get_channel())) {
           blocked_session_handles.push_back(session_handle);
         }
       }
@@ -303,27 +293,7 @@ public:
     QueueSessionTrackWork(SessionTrackWorkType::REFRESH_IDLE);
   }
 
-  void OnSessionStart(size_t packet_len, const uint8_t *packet) {
-    if (packet_len != UCI_MSG_SESSION_START_CMD_LENGTH)
-      return;
-
-    uint32_t session_handle = le_bytes_to_cpu<uint32_t>(&packet[UCI_MSG_SESSION_START_HANDLE_OFFSET]);
-    std::shared_ptr<SessionInfo> pSessionInfo = GetSessionInfo(session_handle);
-
-    // Check STS_INDEX and fetch if it was not set by upper-layer
-    if (!pSessionInfo) {
-      NXPLOG_UCIHAL_E("Unrecognized session start detected, handle=0x%x", session_handle);
-      pSessionInfo = AddNewSession(session_handle, kUnknownSessionId, kUnknownSessionType);
-    }
-
-    NXPLOG_UCIHAL_D("SessionTrack: session start, handle=0x%x "
-      "channel=%u max_rr=%d max_meas=%d",
-      session_handle, pSessionInfo->channel_,
-      pSessionInfo->max_rr_retry_,
-      pSessionInfo->max_measurements_);
-
-    pSessionInfo->deinit_delayed_ = false;
-
+  void OverrideStsIndex(std::shared_ptr<SessionInfo> pSessionInfo) {
     if (!override_sts_index_for_ccc_) {
       return; /* Not needed / used... */
     }
@@ -332,6 +302,8 @@ public:
     if (pSessionInfo->session_type_ != kSessionType_CCCRanging) {
       return;
     }
+
+    const uint32_t session_handle = pSessionInfo->session_handle_;
 
     auto result = QueryStsIndex(session_handle);
     if (!result.first) {
@@ -363,6 +335,30 @@ public:
       uint32_t new_sts_index = (result.second + 1) & ((1 << 30) - 1);
       SetStsIndex(session_handle, new_sts_index);
     }
+  }
+
+  void OnSessionStart(size_t packet_len, const uint8_t *packet) {
+    if (packet_len != UCI_MSG_SESSION_START_CMD_LENGTH)
+      return;
+
+    uint32_t session_handle = le_bytes_to_cpu<uint32_t>(&packet[UCI_MSG_SESSION_START_HANDLE_OFFSET]);
+    std::shared_ptr<SessionInfo> pSessionInfo = GetSessionInfo(session_handle);
+
+    // Check STS_INDEX and fetch if it was not set by upper-layer
+    if (!pSessionInfo) {
+      NXPLOG_UCIHAL_E("Unrecognized session start detected, handle=0x%x", session_handle);
+      pSessionInfo = AddNewSession(session_handle, kUnknownSessionId, kUnknownSessionType);
+    }
+
+    NXPLOG_UCIHAL_D("SessionTrack: session start, handle=0x%x "
+      "channel=%u max_rr=%d max_meas=%d",
+      session_handle, pSessionInfo->config.get_channel(),
+      pSessionInfo->config.get_max_rr_retry(),
+      pSessionInfo->config.get_max_measurements());
+
+    pSessionInfo->deinit_delayed_ = false;
+
+    OverrideStsIndex(pSessionInfo);
   }
 
   // Called by upper-layer's SESSION_STOP_CMD handler
@@ -977,14 +973,10 @@ void SessionTrack_onCountryCodeChanged()
     gSessionTrack->OnCountryCodeChanged();
 }
 
-void SessionTrack_onAppConfig(uint32_t session_handle,
-                              std::optional<uint8_t> channel,
-                              std::optional<int> max_rr_retry,
-                              std::optional<int> max_measurements)
+void SessionTrack_onAppConfig(uint32_t session_handle, const SessionAppConfig& config)
 {
   if (gSessionTrack)
-    gSessionTrack->OnSetAppConfig(session_handle, channel,
-      max_rr_retry, max_measurements);
+    gSessionTrack->OnSetAppConfig(session_handle, config);
 }
 
 void SessionTrack_keepAlive()
