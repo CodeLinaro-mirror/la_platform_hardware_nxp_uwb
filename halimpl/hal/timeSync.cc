@@ -12,9 +12,14 @@ extern phNxpUciHal_Control_t nxpucihal_ctrl;
 
 namespace {
 
+// Extra values to be added to measured uncertainty.
 constexpr uint64_t kExtraUncertaintyInConvertUs = 1000;
-constexpr uint64_t kSystemTimeMaxLatencyUs = 2000 * 1000;
-constexpr uint64_t kUwbsTimeMaxLatencyUs = 500 * 1000;
+
+// Converting system time only possible within 5s.
+constexpr uint64_t kSystemTimeMaxLatencyUs = 5000 * 1000;
+
+// Max uncertainty from querying uwb timestamp.
+constexpr uint64_t kUwbsTimeMaxLatencyUs = 1000 * 1000;
 
 // Returns the UWBS timestamp in micro seconds.
 std::optional<uint64_t> GetUwbsTimeStamp() {
