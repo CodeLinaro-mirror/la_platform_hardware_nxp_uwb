@@ -116,6 +116,9 @@ std::vector<std::string> NxpConfig_GetStrArray(std::string_view key, bool includ
 /* In case the HAL has to set STS index for CCC */
 #define NAME_OVERRIDE_STS_INDEX_FOR_CCC_SESSION    "OVERRIDE_STS_INDEX_FOR_CCC_SESSION"
 
+// Use "Asynchronous" timestamp for timesync.
+#define NAME_CCC_USE_ASYNC_TIMESTAMP   "CCC_USE_ASYNC_TIMESTAMP"
+
 // Inject UWB_INITIATION_TIME (UWB_TIME_0) when it's unset.
 #define NAME_CCC_INJECT_UWB_INIT_TIME   "CCC_INJECT_UWB_INIT_TIME"
 

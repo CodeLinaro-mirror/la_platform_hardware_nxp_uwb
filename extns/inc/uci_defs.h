@@ -146,7 +146,14 @@ constexpr uint8_t kSessionType_AliroRanging = 0xA2;
 /**********************************************
  * UWB Prop Group Opcode-E Opcodes
  **********************************************/
-#define UCI_MSG_BINDING_STATUS_NTF 0x06
+#define UCI_MSG_BINDING_STATUS_NTF      0x06
+
+#define UCI_MSG_TIMESYNC_TIMESTAMP_NTF  0x1d
+#define UCI_MSG_TIMESYNC_TIMESTAMP_NTF_LENGTH             14  // header 4 + status 1 + timestamp 8 + flag 1
+#define UCI_MSG_TIMESYNC_TIMESTAMP_NTF_OFFSET_STATUS      4
+#define UCI_MSG_TIMESYNC_TIMESTAMP_NTF_OFFSET_TIMESTAMP   5
+#define UCI_MSG_TIMESYNC_TIMESTAMP_NTF_OFFSET_FLAG        13
+#define UCI_MSG_TIMESYNC_TIMESTAMP_FLAG_HIGH_ACCURACY     0x01
 
 /**********************************************************
  * OTP Calibration
