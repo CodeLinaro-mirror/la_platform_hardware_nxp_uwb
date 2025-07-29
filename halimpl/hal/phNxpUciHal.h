@@ -328,7 +328,8 @@ void phNxpUciHal_hw_suspend();
 void phNxpUciHal_hw_resume();
 
 tHAL_UWB_STATUS phNxpUciHal_write_unlocked(size_t cmd_len, const uint8_t* p_cmd);
-void phNxpUciHal_read_complete(void* pContext, phTmlUwb_ReadTransactInfo* pInfo);
+// ReadCallback type
+void phNxpUciHal_read_complete(uint8_t* buffer, size_t length);
 
 // Report UCI packet to upper layer
 void report_uci_message(const uint8_t* buffer, size_t len);

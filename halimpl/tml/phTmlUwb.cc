@@ -48,9 +48,8 @@ struct phTmlUwb_ReadInfo {
   std::atomic_bool bThreadRunning;
 
   // Transaction completion Callback function
-  ReadCallback* pThread_Callback;
+  ReadCallback OnPacketReceived;
 
-  void* pContext;           // Context passed while invocation of operation
   uint8_t* pBuffer;         // Buffer passed while invocation of operation
   size_t wLength;           // Length of data read/written
 };
@@ -62,7 +61,6 @@ struct phTmlUwb_Context {
   phTmlUwb_ReadInfo tReadInfo;  /*Pointer to Reader Thread Structure */
   void* pDevHandle;                    /* Pointer to Device Handle */
   std::shared_ptr<MessageQueue<phLibUwb_Message>> pClientMq; /* Pointer to Client thread message queue */
-  sem_t rxSemaphore;
 };
 
 std::unique_ptr<phTmlUwb_Context> gpphTmlUwb_Context;
@@ -73,7 +71,6 @@ extern void setDeviceHandle(void* pDevHandle);
 
 /* Local Function prototypes */
 static void phTmlUwb_CleanUp(void);
-static void phTmlUwb_ReadDeferredCb(void* pParams);
 static void* phTmlUwb_TmlReaderThread(void* pParam);
 static void phTmlUwb_DeferredCall(std::shared_ptr<phLibUwb_Message> msg);
 
@@ -146,27 +143,19 @@ static void* phTmlUwb_TmlReaderThread(void* pParam)
 {
   UNUSED(pParam);
 
-  /* Transaction info buffer to be passed to Callback Thread */
-  static phTmlUwb_ReadTransactInfo tTransactionInfo;
-  /* Structure containing Tml callback function and parameters to be invoked
-     by the callback thread */
-  static phLibUwb_DeferredCall_t tDeferredInfo;
+  if (gpphTmlUwb_Context == nullptr)
+    return nullptr;
 
-  if (gpphTmlUwb_Context->tReadInfo.bThreadRunning.exchange(true)) {
+  phTmlUwb_ReadInfo *info = &gpphTmlUwb_Context->tReadInfo;
+  if (info->bThreadRunning.exchange(true)) {
     NXPLOG_TML_E("TmlReader: Thread already started.");
     return nullptr;
   }
   NXPLOG_TML_D("TmlReader: Thread Started");
 
   /* Writer thread loop shall be running till shutdown is invoked */
-  while (!gpphTmlUwb_Context->tReadInfo.bThreadShouldStop) {
+  while (!info->bThreadShouldStop) {
     NXPLOG_TML_V("TmlReader: Running");
-    if(sem_wait(&gpphTmlUwb_Context->rxSemaphore)) {
-      NXPLOG_TML_E("TmlReader: Failed to wait rxSemaphore err=%d", errno);
-      break;
-    }
-
-    tHAL_UWB_STATUS wStatus = UWBSTATUS_SUCCESS;
 
     /* Read the data from the file onto the buffer */
     if (!gpphTmlUwb_Context->pDevHandle) {
@@ -180,45 +169,25 @@ static void* phTmlUwb_TmlReaderThread(void* pParam)
     int dwNoBytesWrRd =
         phTmlUwb_spi_read(gpphTmlUwb_Context->pDevHandle, temp, UCI_MAX_DATA_LEN);
 
-    if(gpphTmlUwb_Context->tReadInfo.bThreadShouldStop) {
+    if(info->bThreadShouldStop) {
       break;
     }
 
     if (-1 == dwNoBytesWrRd) {
       NXPLOG_TML_E("TmlReader: Error in SPI Read");
-      sem_post(&gpphTmlUwb_Context->rxSemaphore);
     } else if (dwNoBytesWrRd > UCI_MAX_DATA_LEN) {
       NXPLOG_TML_E("TmlReader: Numer of bytes read exceeds the limit");
-      sem_post(&gpphTmlUwb_Context->rxSemaphore);
     } else if(0 == dwNoBytesWrRd) {
       NXPLOG_TML_E("TmlReader: Empty packet Read, Ignore read and try new read");
-      sem_post(&gpphTmlUwb_Context->rxSemaphore);
     } else {
-      memcpy(gpphTmlUwb_Context->tReadInfo.pBuffer, temp, dwNoBytesWrRd);
+      memcpy(info->pBuffer, temp, dwNoBytesWrRd);
+      info->wLength = dwNoBytesWrRd;
 
-      NXPLOG_TML_V("TmlReader: SPI Read successful");
+      // Read operation completed successfully. Calls read callback.
+      NXPLOG_TML_V("TmlReader: SPI Read successful. Call read complete callback.");
 
-      /* Update the actual number of bytes read including header */
-      gpphTmlUwb_Context->tReadInfo.wLength = dwNoBytesWrRd;
-
-      dwNoBytesWrRd = PH_TMLUWB_RESET_VALUE;
-
-      NXPLOG_TML_V("TmlReader: Posting read message");
-
-      /* Fill the Transaction info structure to be passed to Callback
-       * Function */
-      tTransactionInfo.wStatus = wStatus;
-      tTransactionInfo.pBuff = gpphTmlUwb_Context->tReadInfo.pBuffer;
-      tTransactionInfo.wLength = gpphTmlUwb_Context->tReadInfo.wLength;
-
-      /* Read operation completed successfully. Post a Message onto Callback
-       * Thread*/
-      /* Prepare the message to be posted on User thread */
-      tDeferredInfo.pCallback = &phTmlUwb_ReadDeferredCb;
-      tDeferredInfo.pParameter = &tTransactionInfo;
-
-      auto msg = std::make_shared<phLibUwb_Message>(PH_LIBUWB_DEFERREDCALL_MSG, &tDeferredInfo);
-      phTmlUwb_DeferredCall(msg);
+      // Callback
+      info->OnPacketReceived(info->pBuffer, info->wLength);
     }
   } /* End of While loop */
 
@@ -364,7 +333,7 @@ tHAL_UWB_STATUS phTmlUwb_Write(const uint8_t* pBuffer, size_t wLength)
 **                  UWBSTATUS_BUSY - read request is already in progress
 **
 *******************************************************************************/
-tHAL_UWB_STATUS phTmlUwb_StartRead(ReadCallback pTmlReadComplete, void* pContext)
+tHAL_UWB_STATUS phTmlUwb_StartRead(ReadCallback pTmlReadComplete)
 {
   // TODO: move this to gpphTmlUwb_Context
   static uint8_t shared_rx_buffer[UCI_MAX_DATA_LEN];
@@ -386,17 +355,9 @@ tHAL_UWB_STATUS phTmlUwb_StartRead(ReadCallback pTmlReadComplete, void* pContext
   /* Setting the flag marks beginning of a Read Operation */
   gpphTmlUwb_Context->tReadInfo.pBuffer = shared_rx_buffer;
   gpphTmlUwb_Context->tReadInfo.wLength = sizeof(shared_rx_buffer);
-  gpphTmlUwb_Context->tReadInfo.pThread_Callback = pTmlReadComplete;
-  gpphTmlUwb_Context->tReadInfo.pContext = pContext;
+  gpphTmlUwb_Context->tReadInfo.OnPacketReceived = pTmlReadComplete;
 
   NXPLOG_TML_D("StartRead");
-
-  if (sem_init(&gpphTmlUwb_Context->rxSemaphore, 0, 0)) {
-    return UWBSTATUS_FAILED;
-  }
-
-  /* Set first event to invoke Reader Thread */
-  sem_post(&gpphTmlUwb_Context->rxSemaphore);
 
   /* Create Reader threads */
   gpphTmlUwb_Context->tReadInfo.bThreadShouldStop = false;
@@ -430,7 +391,6 @@ void phTmlUwb_StopRead()
 
   // to wakeup from blocking read()
   phTmlUwb_Spi_Ioctl(gpphTmlUwb_Context->pDevHandle, phTmlUwb_ControlCode_t::SetPower, ABORT_READ_PENDING);
-  sem_post(&gpphTmlUwb_Context->rxSemaphore);
 
   if (pthread_join(gpphTmlUwb_Context->readerThread, NULL)) {
     NXPLOG_TML_E("[%s] pthread_join failed for reader thread at line: %d ", __func__, __LINE__);
@@ -438,7 +398,6 @@ void phTmlUwb_StopRead()
   if (gpphTmlUwb_Context->tReadInfo.bThreadRunning) {
     NXPLOG_TML_E("Failed to terminate read thread.");
   }
-  sem_destroy(&gpphTmlUwb_Context->rxSemaphore);
 }
 
 /*******************************************************************************
@@ -456,29 +415,6 @@ void phTmlUwb_StopRead()
 static void phTmlUwb_DeferredCall(std::shared_ptr<phLibUwb_Message> msg)
 {
   gpphTmlUwb_Context->pClientMq->send(msg);
-}
-
-/*******************************************************************************
-**
-** Function         phTmlUwb_ReadDeferredCb
-**
-** Description      Read thread call back function
-**
-** Parameters       pParams - context provided by upper layer
-**
-** Returns          None
-**
-*******************************************************************************/
-static void phTmlUwb_ReadDeferredCb(void* pParams)
-{
-  /* Transaction info buffer to be passed to Callback Function */
-  phTmlUwb_ReadTransactInfo* pTransactionInfo = (phTmlUwb_ReadTransactInfo*)pParams;
-
-  /* Reset the flag to accept another Read Request */
-  gpphTmlUwb_Context->tReadInfo.pThread_Callback(
-      gpphTmlUwb_Context->tReadInfo.pContext, pTransactionInfo);
-
-  sem_post(&gpphTmlUwb_Context->rxSemaphore);
 }
 
 /*******************************************************************************

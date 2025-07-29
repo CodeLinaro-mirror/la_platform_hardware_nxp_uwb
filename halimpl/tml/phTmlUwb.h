@@ -17,10 +17,12 @@
 #ifndef PHTMLUWB_H
 #define PHTMLUWB_H
 
+#include <cstddef>
+#include <cstdint>
 #include <memory>
 
-#include <phUwbCommon.h>
-#include <phMessageQueue.h>
+#include "phUwbCommon.h"
+#include "phMessageQueue.h"
 
 /*
  * Message posted by Reader thread uponl
@@ -49,7 +51,7 @@ struct phTmlUwb_ReadTransactInfo {
 };
 
 // Read IO completion callback to Upper Layer
-using ReadCallback = void (void *pContext, phTmlUwb_ReadTransactInfo* pInfo);
+using ReadCallback = std::function<void(uint8_t* buffer, size_t length)>;
 /*
  * Enum definition contains  supported ioctl control codes.
  *
@@ -73,7 +75,7 @@ tHAL_UWB_STATUS phTmlUwb_Write(const uint8_t* pBuffer, size_t wLength);
 
 // Reader: caller calls this once, callback will be called for every received packet.
 //         and call StopRead() to unscribe RX packet.
-tHAL_UWB_STATUS phTmlUwb_StartRead(ReadCallback pTmlReadComplete, void* pContext);
+tHAL_UWB_STATUS phTmlUwb_StartRead(ReadCallback pTmlReadComplete);
 void phTmlUwb_StopRead();
 
 void phTmlUwb_Chip_Reset(void);

@@ -575,36 +575,27 @@ static void handle_rx_packet(uint8_t *buffer, size_t length)
  * Returns          void.
  *
  ******************************************************************************/
-void phNxpUciHal_read_complete(void* pContext, phTmlUwb_ReadTransactInfo* pInfo)
+void phNxpUciHal_read_complete(uint8_t* buffer, size_t length)
 {
-  UNUSED(pContext);
+  NXPLOG_UCIHAL_V("read successful total len = 0x%zx", length);
 
-  if (pInfo->wStatus != UWBSTATUS_SUCCESS) {
-    NXPLOG_UCIHAL_E("read error status = 0x%x", pInfo->wStatus);
-    return;
-  }
-
-  NXPLOG_UCIHAL_V("read successful status = 0x%x , total len = 0x%zx",
-                  pInfo->wStatus, pInfo->wLength);
-
-  for (int32_t index = 0; index < pInfo->wLength; )
-  {
-    uint8_t extBitSet = (pInfo->pBuff[index + EXTND_LEN_INDICATOR_OFFSET] & EXTND_LEN_INDICATOR_OFFSET_MASK);
-    int32_t length = pInfo->pBuff[index + NORMAL_MODE_LENGTH_OFFSET];
-    if (extBitSet || ((pInfo->pBuff[index] & UCI_MT_MASK) == 0x00)) {
-     length = (length << EXTENDED_MODE_LEN_SHIFT) | pInfo->pBuff[index + EXTENDED_MODE_LEN_OFFSET] ;
+  for (int32_t index = 0; index < length; ) {
+    uint8_t extBitSet = (buffer[index + EXTND_LEN_INDICATOR_OFFSET] & EXTND_LEN_INDICATOR_OFFSET_MASK);
+    int32_t this_length = buffer[index + NORMAL_MODE_LENGTH_OFFSET];
+    if (extBitSet || ((buffer[index] & UCI_MT_MASK) == 0x00)) {
+     this_length = (this_length << EXTENDED_MODE_LEN_SHIFT) | buffer[index + EXTENDED_MODE_LEN_OFFSET] ;
     }
-    length += UCI_MSG_HDR_SIZE;
+    this_length += UCI_MSG_HDR_SIZE;
 
-    if ((index + length) > pInfo->wLength) {
+    if ((index + this_length) > length) {
       NXPLOG_UCIHAL_E("RX Packet misaligned! given length=%zu, offset=%d, len=%d",
-        pInfo->wLength, index, length);
+        length, index, this_length);
       return;
     }
-    handle_rx_packet(&pInfo->pBuff[index], length);
+    handle_rx_packet(&buffer[index], this_length);
 
-    index += length;
-  } //End of loop
+    index += this_length;
+  }
 }
 
 /******************************************************************************
@@ -909,7 +900,7 @@ tHAL_UWB_STATUS phNxpUciHal_hw_init()
     return status;
   }
 
-  status = phTmlUwb_StartRead(&phNxpUciHal_read_complete, NULL);
+  status = phTmlUwb_StartRead(phNxpUciHal_read_complete);
   if (status != UWBSTATUS_SUCCESS) {
     NXPLOG_UCIHAL_E("Failed to start reader thread, %x", status);
     return status;
