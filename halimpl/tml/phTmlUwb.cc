@@ -27,17 +27,6 @@
 #include <phTmlUwb_spi.h>
 #include <phNxpUciHal.h>
 
-/*
- * Duration of Timer to wait after sending an Uci packet
- */
-#define PHTMLUWB_MAXTIME_RETRANSMIT (200U)
-#define MAX_WRITE_RETRY_COUNT 0x03
-/* Value to reset variables of TML  */
-#define PH_TMLUWB_RESET_VALUE (0x00)
-
-/* Indicates a Initial or offset value */
-#define PH_TMLUWB_VALUE_ONE (0x01)
-
 namespace {
 
 constexpr long kHalWriteTimeoutMs = 1000;
@@ -72,7 +61,6 @@ extern void setDeviceHandle(void* pDevHandle);
 /* Local Function prototypes */
 static void phTmlUwb_CleanUp(void);
 static void* phTmlUwb_TmlReaderThread(void* pParam);
-static void phTmlUwb_DeferredCall(std::shared_ptr<phLibUwb_Message> msg);
 
 /* Function definitions */
 
@@ -264,9 +252,6 @@ tHAL_UWB_STATUS phTmlUwb_Shutdown(void)
 **                  callback mechanism.
 **
 **                  NOTE:
-**                  * it is important to post a message with id
-**                    PH_TMLUWB_WRITE_MESSAGE to IntegrationThread after data
-**                    has been written to SRxxx
 **                  * if CRC needs to be computed, then input buffer should be
 **                    capable to store two more bytes apart from length of
 **                    packet
@@ -398,23 +383,6 @@ void phTmlUwb_StopRead()
   if (gpphTmlUwb_Context->tReadInfo.bThreadRunning) {
     NXPLOG_TML_E("Failed to terminate read thread.");
   }
-}
-
-/*******************************************************************************
-**
-** Function         phTmlUwb_DeferredCall
-**
-** Description      Posts message on upper layer thread
-**                  upon successful read or write operation
-**
-** Parameters       msg - message to be posted
-**
-** Returns          None
-**
-*******************************************************************************/
-static void phTmlUwb_DeferredCall(std::shared_ptr<phLibUwb_Message> msg)
-{
-  gpphTmlUwb_Context->pClientMq->send(msg);
 }
 
 /*******************************************************************************

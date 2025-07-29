@@ -25,23 +25,6 @@
 #include "phMessageQueue.h"
 
 /*
- * Message posted by Reader thread uponl
- * completion of requested operation
- */
-#define PH_TMLUWB_READ_MESSAGE (0xAA)
-
-/*
- * Message posted by Writer thread upon
- * completion of requested operation
- */
-#define PH_TMLUWB_WRITE_MESSAGE (0x55)
-
-/*
- * Value indicates to reset device
- */
-#define PH_TMLUWB_RESETDEVICE (0x00008001)
-
-/*
 ***************************Globals,Structure and Enumeration ******************
 */
 struct phTmlUwb_ReadTransactInfo {
