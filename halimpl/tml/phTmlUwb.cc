@@ -72,13 +72,7 @@ struct phTmlUwb_Context {
   void* pDevHandle;                    /* Pointer to Device Handle */
   std::shared_ptr<MessageQueue<phLibUwb_Message>> pClientMq; /* Pointer to Client thread message queue */
   sem_t rxSemaphore;
-  sem_t txSemaphore;      /* Lock/Acquire txRx Semaphore */
-
-  pthread_cond_t wait_busy_condition; /*Condition to wait reader thread*/
-  pthread_mutex_t wait_busy_lock;     /*Condition lock to wait reader thread*/
-  volatile uint8_t wait_busy_flag;    /*Condition flag to wait reader thread*/
-  volatile uint8_t gWriterCbflag;    /* flag to indicate write callback message is pushed to
-                           queue*/
+  sem_t txSemaphore;
 };
 
 std::unique_ptr<phTmlUwb_Context> gpphTmlUwb_Context;
@@ -96,10 +90,6 @@ static void* phTmlUwb_TmlReaderThread(void* pParam);
 static void* phTmlUwb_TmlWriterThread(void* pParam);
 
 extern void setDeviceHandle(void* pDevHandle);
-
-static void phTmlUwb_WaitWriteComplete(void);
-static void phTmlUwb_SignalWriteComplete(void);
-static int phTmlUwb_WaitReadInit(void);
 
 static void phTmlUwb_DeferredCall(std::shared_ptr<phLibUwb_Message> msg);
 
@@ -157,9 +147,6 @@ tHAL_UWB_STATUS phTmlUwb_Init(const char* pDevName,
   setDeviceHandle(gpphTmlUwb_Context->pDevHandle);  // To set device handle for FW download usecase
 
   if (sem_init(&gpphTmlUwb_Context->txSemaphore, 0, 0)) {
-    return UWBSTATUS_FAILED;
-  }
-  if(phTmlUwb_WaitReadInit()) {
     return UWBSTATUS_FAILED;
   }
 
@@ -257,20 +244,6 @@ static void* phTmlUwb_TmlReaderThread(void* pParam)
       tDeferredInfo.pCallback = &phTmlUwb_ReadDeferredCb;
       tDeferredInfo.pParameter = &tTransactionInfo;
 
-      /* TML reader writer callback synchronization mutex lock --- START */
-      if (pthread_mutex_lock(&gpphTmlUwb_Context->wait_busy_lock)) {
-        NXPLOG_TML_E("[%s] Mutex lock failed for wait_busy_lock at line: %d", __func__, __LINE__);
-      }
-
-      if ((gpphTmlUwb_Context->gWriterCbflag == false) &&
-        ((gpphTmlUwb_Context->tReadInfo.pBuffer[0] & 0x60) != 0x60)) {
-        phTmlUwb_WaitWriteComplete();
-      }
-      /* TML reader writer callback synchronization mutex lock --- END */
-      if (pthread_mutex_unlock(&gpphTmlUwb_Context->wait_busy_lock)) {
-        NXPLOG_TML_E("[%s] Mutex unlock failed for wait_busy_lock at line: %d", __func__, __LINE__);
-      }
-
       auto msg = std::make_shared<phLibUwb_Message>(PH_LIBUWB_DEFERREDCALL_MSG, &tDeferredInfo);
       phTmlUwb_DeferredCall(msg);
     }
@@ -330,24 +303,14 @@ static void* phTmlUwb_TmlWriterThread(void* pParam)
 
     NXPLOG_TML_V("TmlWriter: Invoking SPI Write");
 
-    /* TML reader writer callback synchronization mutex lock --- START
-      */
-    if (pthread_mutex_lock(&gpphTmlUwb_Context->wait_busy_lock)) {
-      NXPLOG_TML_E("[%s] Mutex lock failed for wait_busy_lock at line: %d", __func__, __LINE__);
-    }
-    gpphTmlUwb_Context->gWriterCbflag = false;
     int32_t dwNoBytesWrRd =
         phTmlUwb_spi_write(gpphTmlUwb_Context->pDevHandle,
                             gpphTmlUwb_Context->tWriteInfo.pBuffer,
                             gpphTmlUwb_Context->tWriteInfo.wLength);
-    /* TML reader writer callback synchronization mutex lock --- END */
-    if (pthread_mutex_unlock(&gpphTmlUwb_Context->wait_busy_lock)) {
-      NXPLOG_TML_E("[%s] Mutex unlock failed for wait_busy_lock at line: %d", __func__, __LINE__);
-    }
 
     /* Try SPI Write Five Times, if it fails :*/
     if (-1 == dwNoBytesWrRd) {
-      NXPLOG_TML_E("TmlWriter: Error in SPI Write");
+      NXPLOG_TML_E("TmlWriter: Error in SPI Write %d", errno);
       wStatus = PHUWBSTVAL(CID_UWB_TML, UWBSTATUS_FAILED);
     } else {
       phNxpUciHal_print_packet(NXP_TML_UCI_CMD_AP_2_UWBS,
@@ -373,20 +336,6 @@ static void* phTmlUwb_TmlWriterThread(void* pParam)
 
     auto msg = std::make_shared<phLibUwb_Message>(PH_LIBUWB_DEFERREDCALL_MSG, &tDeferredInfo);
     phTmlUwb_DeferredCall(msg);
-
-    if (UWBSTATUS_SUCCESS == wStatus) {
-      /* TML reader writer callback synchronization mutex lock --- START
-          */
-      if (pthread_mutex_lock(&gpphTmlUwb_Context->wait_busy_lock)) {
-        NXPLOG_TML_E("[%s] Mutex lock failed for wait_busy_lock at line: %d", __func__, __LINE__);
-      }
-      gpphTmlUwb_Context->gWriterCbflag = true;
-      phTmlUwb_SignalWriteComplete();
-        /* TML reader writer callback synchronization mutex lock --- END */
-      if (pthread_mutex_unlock(&gpphTmlUwb_Context->wait_busy_lock)) {
-        NXPLOG_TML_E("[%s] Mutex unlock failed for wait_busy_lock at line: %d", __func__, __LINE__);
-      }
-    }
   } /* End of While loop */
 
   gpphTmlUwb_Context->tWriteInfo.bThreadRunning = false;
@@ -416,13 +365,7 @@ static void phTmlUwb_CleanUp(void) {
   }
 
   sem_destroy(&gpphTmlUwb_Context->txSemaphore);
-  if (pthread_mutex_destroy(&gpphTmlUwb_Context->wait_busy_lock)) {
-    NXPLOG_TML_E("[%s] Failed to destroy mutex 'wait_busy_lock' at line: %d", __func__, __LINE__);
-  }
-  if (pthread_cond_destroy(&gpphTmlUwb_Context->wait_busy_condition)) {
-    NXPLOG_TML_E("[%s] Failed to destroy conditional variable 'wait_busy_condition' at line: %d",
-        __func__, __LINE__);
-  }
+
   phTmlUwb_spi_close(gpphTmlUwb_Context->pDevHandle);
   gpphTmlUwb_Context->pDevHandle = NULL;
 
@@ -753,93 +696,6 @@ static void phTmlUwb_WriteDeferredCb(void* pParams) {
   gpphTmlUwb_Context->tWriteInfo.bThreadBusy = false;
   gpphTmlUwb_Context->tWriteInfo.pThread_Callback(
       gpphTmlUwb_Context->tWriteInfo.pContext, pTransactionInfo);
-}
-
-/*******************************************************************************
-**
-** Function         phTmlUwb_WaitWriteComplete
-**
-** Description      wait function for reader thread
-**
-** Parameters       None
-**
-** Returns          None
-**
-*******************************************************************************/
-static void phTmlUwb_WaitWriteComplete(void) {
-  int ret;
-  struct timespec absTimeout;
-  if (clock_gettime(CLOCK_MONOTONIC, &absTimeout) == -1) {
-    NXPLOG_TML_E("Reader Thread clock_gettime failed");
-  } else {
-    absTimeout.tv_sec += 1; /*1 second timeout*/
-    gpphTmlUwb_Context->wait_busy_flag = true;
-    NXPLOG_TML_D("phTmlUwb_WaitWriteComplete - enter");
-    ret = pthread_cond_timedwait(&gpphTmlUwb_Context->wait_busy_condition,
-                                 &gpphTmlUwb_Context->wait_busy_lock,
-                                 &absTimeout);
-    if ((ret != 0) && (ret != ETIMEDOUT)) {
-      NXPLOG_TML_E("Reader Thread wait failed");
-    }
-    NXPLOG_TML_D("phTmlUwb_WaitWriteComplete - exit");
-  }
-}
-
-/*******************************************************************************
-**
-** Function         phTmlUwb_SignalWriteComplete
-**
-** Description      function to invoke reader thread
-**
-** Parameters       None
-**
-** Returns          None
-**
-*******************************************************************************/
-static void phTmlUwb_SignalWriteComplete(void) {
-  int ret;
-  if (gpphTmlUwb_Context->wait_busy_flag == true) {
-    NXPLOG_TML_D("phTmlUwb_SignalWriteComplete - enter");
-    gpphTmlUwb_Context->wait_busy_flag = false;
-    ret = pthread_cond_signal(&gpphTmlUwb_Context->wait_busy_condition);
-    if (ret) {
-      NXPLOG_TML_E(" phTmlUwb_SignalWriteComplete failed, error = 0x%X", ret);
-    }
-    NXPLOG_TML_D("phTmlUwb_SignalWriteComplete - exit");
-  }
-}
-
-/*******************************************************************************
-**
-** Function         phTmlUwb_WaitReadInit
-**
-** Description      init function for reader thread
-**
-** Parameters       None
-**
-** Returns          int
-**
-*******************************************************************************/
-static int phTmlUwb_WaitReadInit(void) {
-  int ret;
-  pthread_condattr_t attr;
-  if (pthread_condattr_init(&attr)) {
-    NXPLOG_TML_E(" [%s] conditional attr init failed at line: %d", __func__, __LINE__);
-  }
-  if (pthread_condattr_setclock(&attr, CLOCK_MONOTONIC)) {
-    NXPLOG_TML_E(" [%s] conditional attr setClock failed at line: %d", __func__, __LINE__);
-  }
-  memset(&gpphTmlUwb_Context->wait_busy_condition, 0,
-         sizeof(gpphTmlUwb_Context->wait_busy_condition));
-  if (pthread_mutex_init(&gpphTmlUwb_Context->wait_busy_lock, NULL)) {
-    NXPLOG_TML_E(" [%s] mutex init failed for wait busy lock at line: %d", __func__,  __LINE__);
-  }
-  ret = pthread_cond_init(&gpphTmlUwb_Context->wait_busy_condition, &attr);
-  if (ret) {
-    NXPLOG_TML_E("[%s] pthread_cond_init failed for wait_busy_condition at line: %d", __func__,
-        __LINE__);
-  }
-  return ret;
 }
 
 /*******************************************************************************
