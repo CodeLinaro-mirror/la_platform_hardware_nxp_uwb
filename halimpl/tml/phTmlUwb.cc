@@ -16,6 +16,9 @@
 
 #include <atomic>
 #include <cerrno>
+#include <condition_variable>
+#include <mutex>
+#include <thread>
 
 #include <phNxpLog.h>
 #include <phNxpUciHal_utils.h>
@@ -37,14 +40,13 @@
 
 namespace {
 
-struct phTmlUwb_ThreadInfo {
-  std::atomic_bool bThreadShouldStop;
-  std::atomic_bool bThreadRunning;
-  std::atomic_bool bThreadBusy;
-};
+constexpr long kHalWriteTimeoutMs = 1000;
 
 // Structure containing details related to read and write operations
-struct phTmlUwb_ReadInfo : phTmlUwb_ThreadInfo {
+struct phTmlUwb_ReadInfo {
+  std::atomic_bool bThreadShouldStop;
+  std::atomic_bool bThreadRunning;
+
   // Transaction completion Callback function
   ReadCallback* pThread_Callback;
 
@@ -53,44 +55,26 @@ struct phTmlUwb_ReadInfo : phTmlUwb_ThreadInfo {
   size_t wLength;           // Length of data read/written
 };
 
-struct phTmlUwb_WriteInfo : phTmlUwb_ThreadInfo {
-  // Transaction completion Callback function
-  WriteCallback* pThread_Callback;
-
-  void* pContext;           // Context passed while invocation of operation
-  const uint8_t* pBuffer;   // Buffer passed while invocation of operation
-  size_t wLength;           // Length of data read/written
-};
-
 // Base Context Structure containing members required for entire session
 struct phTmlUwb_Context {
   pthread_t readerThread;
-  pthread_t writerThread;
 
   phTmlUwb_ReadInfo tReadInfo;  /*Pointer to Reader Thread Structure */
-  phTmlUwb_WriteInfo tWriteInfo; /*Pointer to Writer Thread Structure */
   void* pDevHandle;                    /* Pointer to Device Handle */
   std::shared_ptr<MessageQueue<phLibUwb_Message>> pClientMq; /* Pointer to Client thread message queue */
   sem_t rxSemaphore;
-  sem_t txSemaphore;
 };
 
 std::unique_ptr<phTmlUwb_Context> gpphTmlUwb_Context;
 
 }   // namespace
 
-/* Local Function prototypes */
-static tHAL_UWB_STATUS phTmlUwb_StartWriterThread(void);
-static void phTmlUwb_StopWriterThread(void);
-
-static void phTmlUwb_CleanUp(void);
-static void phTmlUwb_ReadDeferredCb(void* pParams);
-static void phTmlUwb_WriteDeferredCb(void* pParams);
-static void* phTmlUwb_TmlReaderThread(void* pParam);
-static void* phTmlUwb_TmlWriterThread(void* pParam);
-
 extern void setDeviceHandle(void* pDevHandle);
 
+/* Local Function prototypes */
+static void phTmlUwb_CleanUp(void);
+static void phTmlUwb_ReadDeferredCb(void* pParams);
+static void* phTmlUwb_TmlReaderThread(void* pParam);
 static void phTmlUwb_DeferredCall(std::shared_ptr<phLibUwb_Message> msg);
 
 /* Function definitions */
@@ -140,20 +124,9 @@ tHAL_UWB_STATUS phTmlUwb_Init(const char* pDevName,
     gpphTmlUwb_Context->pDevHandle = NULL;
     return PHUWBSTVAL(CID_UWB_TML, UWBSTATUS_INVALID_DEVICE);
   }
-
-  gpphTmlUwb_Context->tWriteInfo.bThreadBusy = false;
   gpphTmlUwb_Context->pClientMq = pClientMq;
 
   setDeviceHandle(gpphTmlUwb_Context->pDevHandle);  // To set device handle for FW download usecase
-
-  if (sem_init(&gpphTmlUwb_Context->txSemaphore, 0, 0)) {
-    return UWBSTATUS_FAILED;
-  }
-
-  // Start TML writer thread.
-  if (UWBSTATUS_SUCCESS != phTmlUwb_StartWriterThread()) {
-    return PHUWBSTVAL(CID_UWB_TML, UWBSTATUS_FAILED);
-  }
 
   return UWBSTATUS_SUCCESS;
 }
@@ -164,7 +137,7 @@ tHAL_UWB_STATUS phTmlUwb_Init(const char* pDevName,
 **
 ** Description      Read the data from the lower layer driver
 **
-** Parameters       pParam  - parameters for Writer thread function
+** Parameters       pParam  - parameters for Reader thread function
 **
 ** Returns          None
 **
@@ -257,95 +230,6 @@ static void* phTmlUwb_TmlReaderThread(void* pParam)
 
 /*******************************************************************************
 **
-** Function         phTmlUwb_TmlWriterThread
-**
-** Description      Writes the requested data onto the lower layer driver
-**
-** Parameters       pParam  - context provided by upper layer
-**
-** Returns          None
-**
-*******************************************************************************/
-static void* phTmlUwb_TmlWriterThread(void* pParam)
-{
-  UNUSED(pParam);
-
-  /* Transaction info buffer to be passed to Callback Thread */
-  static phTmlUwb_WriteTransactInfo tTransactionInfo;
-  /* Structure containing Tml callback function and parameters to be invoked
-     by the callback thread */
-  static phLibUwb_DeferredCall_t tDeferredInfo;
-
-  if (gpphTmlUwb_Context->tWriteInfo.bThreadRunning.exchange(true)) {
-    NXPLOG_TML_E("TmlWriter: Thread already started.");
-    return nullptr;
-  }
-  NXPLOG_TML_D("TmlWriter: Thread Started");
-
-  /* Writer thread loop shall be running till shutdown is invoked */
-  while (!gpphTmlUwb_Context->tWriteInfo.bThreadShouldStop) {
-    NXPLOG_TML_V("TmlWriter: Running");
-    if (sem_wait(&gpphTmlUwb_Context->txSemaphore)) {
-      NXPLOG_TML_E("TmlWriter: Failed to wait txSemaphore, err=%d", errno);
-      break;
-    }
-
-    if (gpphTmlUwb_Context->tWriteInfo.bThreadShouldStop) {
-      break;
-    }
-
-    tHAL_UWB_STATUS wStatus = UWBSTATUS_SUCCESS;
-
-    if (!gpphTmlUwb_Context->pDevHandle) {
-      NXPLOG_TML_E("TmlWriter: invalid file handle");
-      break;
-    }
-
-    NXPLOG_TML_V("TmlWriter: Invoking SPI Write");
-
-    int32_t dwNoBytesWrRd =
-        phTmlUwb_spi_write(gpphTmlUwb_Context->pDevHandle,
-                            gpphTmlUwb_Context->tWriteInfo.pBuffer,
-                            gpphTmlUwb_Context->tWriteInfo.wLength);
-
-    /* Try SPI Write Five Times, if it fails :*/
-    if (-1 == dwNoBytesWrRd) {
-      NXPLOG_TML_E("TmlWriter: Error in SPI Write %d", errno);
-      wStatus = PHUWBSTVAL(CID_UWB_TML, UWBSTATUS_FAILED);
-    } else {
-      phNxpUciHal_print_packet(NXP_TML_UCI_CMD_AP_2_UWBS,
-                                gpphTmlUwb_Context->tWriteInfo.pBuffer,
-                                gpphTmlUwb_Context->tWriteInfo.wLength);
-    }
-    if (UWBSTATUS_SUCCESS == wStatus) {
-      NXPLOG_TML_V("TmlWriter: SPI Write successful");
-      dwNoBytesWrRd = PH_TMLUWB_VALUE_ONE;
-    }
-
-    NXPLOG_TML_V("TmlWriter: Posting write message");
-
-    /* Fill the Transaction info structure to be passed to Callback Function
-     */
-    tTransactionInfo.wStatus = wStatus;
-    tTransactionInfo.pBuff = gpphTmlUwb_Context->tWriteInfo.pBuffer;
-    tTransactionInfo.wLength = dwNoBytesWrRd;
-
-    /* Prepare the message to be posted on the User thread */
-    tDeferredInfo.pCallback = &phTmlUwb_WriteDeferredCb;
-    tDeferredInfo.pParameter = &tTransactionInfo;
-
-    auto msg = std::make_shared<phLibUwb_Message>(PH_LIBUWB_DEFERREDCALL_MSG, &tDeferredInfo);
-    phTmlUwb_DeferredCall(msg);
-  } /* End of While loop */
-
-  gpphTmlUwb_Context->tWriteInfo.bThreadRunning = false;
-  NXPLOG_TML_D("TmlWriter: Thread stopped");
-
-  return NULL;
-}
-
-/*******************************************************************************
-**
 ** Function         phTmlUwb_CleanUp
 **
 ** Description      Clears all handles opened during TML initialization
@@ -363,8 +247,6 @@ static void phTmlUwb_CleanUp(void) {
   if (NULL != gpphTmlUwb_Context->pDevHandle) {
     (void)phTmlUwb_Spi_Ioctl(gpphTmlUwb_Context->pDevHandle, phTmlUwb_ControlCode_t::SetPower, 0);
   }
-
-  sem_destroy(&gpphTmlUwb_Context->txSemaphore);
 
   phTmlUwb_spi_close(gpphTmlUwb_Context->pDevHandle);
   gpphTmlUwb_Context->pDevHandle = NULL;
@@ -396,8 +278,6 @@ tHAL_UWB_STATUS phTmlUwb_Shutdown(void)
 
   // Abort io threads
   phTmlUwb_StopRead();
-
-  phTmlUwb_StopWriterThread();
 
   phTmlUwb_CleanUp();
 
@@ -435,41 +315,28 @@ tHAL_UWB_STATUS phTmlUwb_Shutdown(void)
 **                  UWBSTATUS_BUSY - write request is already in progress
 **
 *******************************************************************************/
-tHAL_UWB_STATUS phTmlUwb_Write(const uint8_t* pBuffer, size_t wLength,
-                         WriteCallback pTmlWriteComplete,
-                         void* pContext) {
-  /* Check whether TML is Initialized */
+tHAL_UWB_STATUS phTmlUwb_Write(const uint8_t* pBuffer, size_t wLength)
+{
+  if (pBuffer == nullptr || wLength == 0) {
+    return UWBSTATUS_INVALID_PARAMETER;
+  }
+
   if (gpphTmlUwb_Context == nullptr || gpphTmlUwb_Context->pDevHandle == nullptr) {
     NXPLOG_TML_E("Tml not initialized.");
     return UWBSTATUS_NOT_INITIALISED;
   }
 
-  if (pBuffer == nullptr || wLength == 0 || pTmlWriteComplete == nullptr) {
-    return UWBSTATUS_INVALID_PARAMETER;
+  phNxpUciHal_print_packet(NXP_TML_UCI_CMD_AP_2_UWBS, pBuffer, wLength);
+
+  int dwNoBytesWrRd =
+    phTmlUwb_spi_write(gpphTmlUwb_Context->pDevHandle, pBuffer, wLength);
+
+  if (-1 == dwNoBytesWrRd) {
+    NXPLOG_TML_E("TmlWriter: Error in SPI Write %d", errno);
+    return PHUWBSTVAL(CID_UWB_TML, UWBSTATUS_FAILED);
   }
 
-  // Setting the flag marks beginning of a Write Operation .
-  if (gpphTmlUwb_Context->tWriteInfo.bThreadBusy.exchange(true)) {
-    NXPLOG_TML_E("Writer thread busy.");
-    return UWBSTATUS_BUSY;
-  }
-
-  // Only one tx transaction can be executed at a time.
-  static uint8_t buffer[UCI_MAX_DATA_LEN];
-  if (wLength > sizeof(buffer)) {
-    return UWBSTATUS_FAILED;
-  }
-  memcpy(buffer, pBuffer, wLength);
-
-  gpphTmlUwb_Context->tWriteInfo.pBuffer = buffer;
-  gpphTmlUwb_Context->tWriteInfo.wLength = wLength;
-  gpphTmlUwb_Context->tWriteInfo.pThread_Callback = pTmlWriteComplete;
-  gpphTmlUwb_Context->tWriteInfo.pContext = pContext;
-
-  /* Set event to invoke Writer Thread */
-  sem_post(&gpphTmlUwb_Context->txSemaphore);
-
-  return UWBSTATUS_PENDING;
+  return UWBSTATUS_SUCCESS;
 }
 
 /*******************************************************************************
@@ -576,69 +443,6 @@ void phTmlUwb_StopRead()
 
 /*******************************************************************************
 **
-** Function         phTmlUwb_StartWriterThread
-**
-** Description      start writer thread
-**
-** Parameters       None
-**
-** Returns          UWB status:
-**                  UWBSTATUS_SUCCESS - threads initialized successfully
-**                  UWBSTATUS_FAILED - initialization failed due to system error
-**
-*******************************************************************************/
-static tHAL_UWB_STATUS phTmlUwb_StartWriterThread(void)
-{
-  int ret;
-
-  gpphTmlUwb_Context->tWriteInfo.bThreadShouldStop = false;
-
-  /*Start Writer Thread*/
-  ret = pthread_create(&gpphTmlUwb_Context->writerThread, NULL,
-                       &phTmlUwb_TmlWriterThread, NULL);
-  if (ret) {
-    return UWBSTATUS_FAILED;
-  } else {
-    return UWBSTATUS_SUCCESS;
-  }
-}
-
-
-/*******************************************************************************
-**
-** Function         phTmlUwb_StopWriterThread
-**
-** Description      Stop writer thread
-**
-** Parameters       None
-**
-** Returns          None
-**
-*******************************************************************************/
-static void phTmlUwb_StopWriterThread(void)
-{
-  NXPLOG_TML_D("StopWrite");
-
-  gpphTmlUwb_Context->tWriteInfo.bThreadBusy = false;
-
-  if (gpphTmlUwb_Context->tWriteInfo.bThreadShouldStop.exchange(true)) {
-    NXPLOG_TML_D("Writer thread already requested to be stopped.");
-    return;
-  }
-
-  if (gpphTmlUwb_Context->tWriteInfo.bThreadRunning) {
-    sem_post(&gpphTmlUwb_Context->txSemaphore);
-
-    if (pthread_join(gpphTmlUwb_Context->writerThread, NULL)) {
-      NXPLOG_TML_E("[%s] pthread_join failed for writer thread at line: %d ", __func__, __LINE__);
-    }
-  } else {
-    NXPLOG_TML_E("Writer thread requested to be stopped while already in stopped.");
-  }
-}
-
-/*******************************************************************************
-**
 ** Function         phTmlUwb_DeferredCall
 **
 ** Description      Posts message on upper layer thread
@@ -675,27 +479,6 @@ static void phTmlUwb_ReadDeferredCb(void* pParams)
       gpphTmlUwb_Context->tReadInfo.pContext, pTransactionInfo);
 
   sem_post(&gpphTmlUwb_Context->rxSemaphore);
-}
-
-/*******************************************************************************
-**
-** Function         phTmlUwb_WriteDeferredCb
-**
-** Description      Write thread call back function
-**
-** Parameters       pParams - context provided by upper layer
-**
-** Returns          None
-**
-*******************************************************************************/
-static void phTmlUwb_WriteDeferredCb(void* pParams) {
-  /* Transaction info buffer to be passed to Callback Function */
-  phTmlUwb_WriteTransactInfo* pTransactionInfo = (phTmlUwb_WriteTransactInfo*)pParams;
-
-  // Reset the flag to accept another Write Request
-  gpphTmlUwb_Context->tWriteInfo.bThreadBusy = false;
-  gpphTmlUwb_Context->tWriteInfo.pThread_Callback(
-      gpphTmlUwb_Context->tWriteInfo.pContext, pTransactionInfo);
 }
 
 /*******************************************************************************

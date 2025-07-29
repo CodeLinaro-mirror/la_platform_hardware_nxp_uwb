@@ -78,7 +78,8 @@ tHAL_UWB_STATUS phNxpUciHal_process_ext_cmd_rsp(size_t cmd_len,
   // upper-layer should handle the case of UWBSTATUS_COMMAND_RETRANSMIT && isRetryNotRequired
   if (phNxpUciHal_is_retry_not_required(p_cmd[0]) ||
       cmd_len < UCI_MSG_HDR_SIZE) {
-    return phNxpUciHal_write_unlocked(cmd_len, p_cmd);
+
+    return phTmlUwb_Write(p_cmd, cmd_len);
   }
 
   const uint8_t mt = (p_cmd[0] & UCI_MT_MASK) >> UCI_MT_SHIFT;
@@ -95,7 +96,7 @@ tHAL_UWB_STATUS phNxpUciHal_process_ext_cmd_rsp(size_t cmd_len,
   }
   while(nr_retries < MAX_COMMAND_RETRY_COUNT) {
     nxpucihal_ctrl.cmdrsp.StartCmd(gid, oid);
-    status = phNxpUciHal_write_unlocked(cmd_len, p_cmd);
+    status = phTmlUwb_Write(p_cmd, cmd_len);
 
     if (status != UWBSTATUS_SUCCESS) {
       NXPLOG_UCIHAL_D("phNxpUciHal_write failed for hal ext");

@@ -54,9 +54,7 @@ phNxpUciHal_Control_t nxpucihal_ctrl;
 bool uwb_get_platform_id = false;
 uint32_t timeoutTimerId = 0;
 char persistant_log_path[120];
-constexpr long HAL_WRITE_TIMEOUT_MS = 1000;
 /**************** local methods used in this file only ************************/
-static void phNxpUciHal_write_complete(void* pContext, phTmlUwb_WriteTransactInfo* pInfo);
 extern int phNxpUciHal_fw_download();
 static void phNxpUciHal_getVersionInfo();
 static tHAL_UWB_STATUS phNxpUciHal_sendCoreConfig(const uint8_t *p_cmd,
@@ -457,63 +455,6 @@ int32_t phNxpUciHal_write(size_t data_len, const uint8_t* p_data) {
 
   /* No data written */
   return (status == UWBSTATUS_SUCCESS) ? data_len : 0;
-}
-
-/******************************************************************************
- * Function         phNxpUciHal_write_unlocked
- *
- * Description      This is the actual function which is being called by
- *                  phNxpUciHal_write. This function writes the data to UWBC.
- *                  It waits till write callback provide the result of write
- *                  process.
- *
- * Returns          Status code.
- *
- ******************************************************************************/
-tHAL_UWB_STATUS phNxpUciHal_write_unlocked(size_t data_len, const uint8_t* p_data) {
-  tHAL_UWB_STATUS status;
-
-  if ((data_len > UCI_MAX_DATA_LEN) || (data_len < UCI_PKT_HDR_LEN)) {
-    NXPLOG_UCIHAL_E("Invalid data_len");
-    return UWBSTATUS_INVALID_PARAMETER;
-  }
-
-  /* Create the local semaphore */
-  UciHalSemaphore cb_data;
-
-  status = phTmlUwb_Write(p_data, data_len, phNxpUciHal_write_complete, &cb_data);
-
-  if (status != UWBSTATUS_PENDING) {
-    return UWBSTATUS_FAILED;
-  }
-
-  /* Wait for callback response */
-  if (cb_data.wait_timeout_msec(HAL_WRITE_TIMEOUT_MS)) {
-    NXPLOG_UCIHAL_E("write_unlocked semaphore error");
-    return UWBSTATUS_FAILED;
-  }
-
-  return UWBSTATUS_SUCCESS;
-}
-
-/******************************************************************************
- * Function         phNxpUciHal_write_complete
- *
- * Description      This function handles write callback.
- *
- * Returns          void.
- *
- ******************************************************************************/
-static void phNxpUciHal_write_complete(void* pContext,
-                                       phTmlUwb_WriteTransactInfo* pInfo) {
-  UciHalSemaphore* p_cb_data = (UciHalSemaphore*)pContext;
-
-  if (pInfo->wStatus == UWBSTATUS_SUCCESS) {
-    NXPLOG_UCIHAL_V("write successful status = 0x%x", pInfo->wStatus);
-  } else {
-    NXPLOG_UCIHAL_E("write error status = 0x%x", pInfo->wStatus);
-  }
-  p_cb_data->post(pInfo->wStatus);
 }
 
 void report_uci_message(const uint8_t* buffer, size_t len)

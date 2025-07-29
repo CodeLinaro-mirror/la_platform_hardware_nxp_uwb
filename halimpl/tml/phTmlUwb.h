@@ -42,44 +42,14 @@
 /*
 ***************************Globals,Structure and Enumeration ******************
 */
-
-/*
- * Transaction (Tx/Rx) completion information structure of TML
- *
- * This structure holds the completion callback information of the
- * transaction passed from the TML layer to the Upper layer
- * along with the completion callback.
- *
- * The value of field wStatus can be interpreted as:
- *
- *     - UWBSTATUS_SUCCESS                    Transaction performed
- * successfully.
- *     - UWBSTATUS_FAILED                     Failed to wait on Read/Write
- * operation.
- *     - UWBSTATUS_INSUFFICIENT_STORAGE       Not enough memory to store data in
- * case of read.
- *     - UWBSTATUS_BOARD_COMMUNICATION_ERROR  Failure to Read/Write from the
- * file or timeout.
- */
-
-struct phTmlUwb_WriteTransactInfo {
-  tHAL_UWB_STATUS wStatus;
-  const uint8_t* pBuff;
-  size_t wLength;
-};
-
 struct phTmlUwb_ReadTransactInfo {
   tHAL_UWB_STATUS wStatus;
   uint8_t* pBuff;
   size_t wLength;
 };
 
-// IO completion callback to Upper Layer
-// pContext - Context provided by upper layer
-// pInfo    - Transaction info. See phTmlUwb_[Read|Write]TransactInfo
+// Read IO completion callback to Upper Layer
 using ReadCallback = void (void *pContext, phTmlUwb_ReadTransactInfo* pInfo);
-using WriteCallback = void (void *pContext, phTmlUwb_WriteTransactInfo* pInfo);
-
 /*
  * Enum definition contains  supported ioctl control codes.
  *
@@ -99,10 +69,7 @@ tHAL_UWB_STATUS phTmlUwb_Shutdown(void);
 void phTmlUwb_Suspend(void);
 void phTmlUwb_Resume(void);
 
-// Writer: caller should call this for every write io
-tHAL_UWB_STATUS phTmlUwb_Write(const uint8_t* pBuffer, size_t wLength,
-                         WriteCallback pTmlWriteComplete,
-                         void* pContext);
+tHAL_UWB_STATUS phTmlUwb_Write(const uint8_t* pBuffer, size_t wLength);
 
 // Reader: caller calls this once, callback will be called for every received packet.
 //         and call StopRead() to unscribe RX packet.
