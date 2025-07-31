@@ -17,8 +17,10 @@
 #ifndef _PHNXPUCIHAL_H_
 #define _PHNXPUCIHAL_H_
 
+#include <chrono>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <thread>
 #include <utility>
 
@@ -169,72 +171,116 @@ typedef struct {
 // For checking CMD/RSP turn around matching.
 class CmdRspCheck {
 public:
-  CmdRspCheck() { }
+  CmdRspCheck() :
+      inprogress_(false), got_rsp_(false),
+      status_(UWBSTATUS_FAILED) { }
 
   void StartCmd(uint8_t gid, uint8_t oid) {
-    if (sem_ != nullptr) {
+    std::lock_guard<std::mutex> lk(lock_);
+
+    if (inprogress_) {
       NXPLOG_UCIHAL_E("CMD/RSP turnaround is already ongoing!");
     } else {
-      sem_ = std::make_shared<UciHalSemaphore>();
+      got_rsp_ = false;
+      inprogress_ = true;
       gid_ = gid;
       oid_ = oid;
     }
   }
 
-  // CMD writer waits for the corresponding RSP
+  // CMD writer waits for the corresponding RSP.
+  // Returns:
+  //  UWBSTATUS_SUCCESS: success, got a matched RSP packet.
+  //  UWBSTATUS_COMMAND_RETRANSMIT: retransmission required.
+  //  UWBSTATUS_RESPONSE_TIMEOUT: no RSP received within the timeout.
+  //  UWBSTATUS_CMD_ABORTED: the transaction has been cancelled by user.
+  //  UWBSTATUS_FAILED: failed due to other reasons.
   tHAL_UWB_STATUS Wait(long timeout_ms) {
-    auto sem = GetSemaphore();
-    if (sem == nullptr) {
+    std::unique_lock<std::mutex> lk(lock_);
+
+    if (!inprogress_ && !got_rsp_) {
       NXPLOG_UCIHAL_E("Wait CMD/RSP for non-existed turnaround!");
-      return UCI_STATUS_FAILED;
+      return UWBSTATUS_FAILED;
     }
-    sem->wait_timeout_msec(timeout_ms);
-    auto ret = sem->getStatus();
-    ReleaseSemaphore();
-    return ret;
+    if (inprogress_) {
+      if (!cond_.wait_for(lk, std::chrono::milliseconds(timeout_ms),
+                          [this] { return !inprogress_; })) {
+        // Aborts the transaction on timeout,
+        NXPLOG_UCIHAL_E("CMD/RSP timeout, cancel the transaction.");
+        inprogress_ = false;
+        got_rsp_ = false;
+        return UWBSTATUS_RESPONSE_TIMEOUT;
+      }
+    }
+    if (!got_rsp_) {
+      NXPLOG_UCIHAL_E("No valid RSP received, maybe cmd/rsp transaction cancelled?");
+      return UWBSTATUS_FAILED;
+    }
+    got_rsp_ = false;
+    return status_;
   }
 
-  // Reset the state, this shouldn't be called while
-  // Someone is waiting from WaitRsp().
+  // Cancel the ongoing transaction.
   void Cancel() {
-    ReleaseSemaphore();
+    std::unique_lock<std::mutex> lk(lock_);
+    status_ = UWBSTATUS_CMD_ABORTED;
+    got_rsp_ = false;
+    if (inprogress_) {
+      inprogress_ = false;
+      lk.unlock();
+      cond_.notify_one();
+    }
   }
 
-  // Wakes up the user thread when RSP packet is matched.
+  // Wakes up the user thread, status code setup by verifying the RSP type given.
   void Wakeup(uint8_t gid, uint8_t oid) {
-    auto sem = GetSemaphore();
-    if (sem == nullptr) {
+    std::unique_lock<std::mutex> lk(lock_);
+
+    if (!inprogress_) {
       NXPLOG_UCIHAL_E("Wakeup CMD/RSP while no one is waiting for CMD/RSP!");
       return;
     }
+
+    got_rsp_ = true;
+
     if (gid_ != gid || oid_ != oid) {
       NXPLOG_UCIHAL_E(
         "Received incorrect response of GID:%x OID:%x, expected GID:%x OID:%x",
         gid, oid, gid_, oid_);
-      sem->post(UWBSTATUS_COMMAND_RETRANSMIT);
+      status_ = UWBSTATUS_COMMAND_RETRANSMIT;
     } else {
-      sem->post(UWBSTATUS_SUCCESS);
+      status_ = UWBSTATUS_SUCCESS;
     }
+    inprogress_ = false;
+    lk.unlock();
+    cond_.notify_one();
   }
 
   // Wakes up the user thread with error status code.
   void WakeupError(tHAL_UWB_STATUS status) {
-    auto sem = GetSemaphore();
-    if (sem == nullptr) {
+    std::unique_lock<std::mutex> lk(lock_);
+    if (!inprogress_) {
       NXPLOG_UCIHAL_V("Got error while no one is waiting for CMD/RSP!");
       return;
     }
-    sem->post(status);
+    status_ = status;
+    got_rsp_ = true;
+    inprogress_ = false;
+    lk.unlock();
+    cond_.notify_one();
   }
 
 private:
-  std::shared_ptr<UciHalSemaphore> GetSemaphore() {
-    return sem_;
-  }
-  void ReleaseSemaphore() {
-    sem_ = nullptr;
-  }
-  std::shared_ptr<UciHalSemaphore> sem_;
+  std::mutex lock_;
+  std::condition_variable cond_;
+  bool inprogress_;
+
+  // set true from Wakeup(), the result data is valid only when this flag is set.
+  // Only one waiter can fetch the result data.
+  bool got_rsp_;
+
+  // result data from RSP packet.
+  tHAL_UWB_STATUS status_;
   uint8_t gid_;
   uint8_t oid_;
 };
