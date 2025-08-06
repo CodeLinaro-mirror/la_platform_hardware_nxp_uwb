@@ -139,6 +139,9 @@ constexpr uint8_t kSessionType_AliroRanging = 0xA2;
 #define UCI_MSG_ANDROID_TIMESTAMP_ANCHOR_TO_UWBS    0x03
 #define UCI_MSG_ANDROID_TIMESTAMP_ANCHOR_TO_UWBS_CMD_LEN  20  // header 4 + system-time 8 + ble-time 8
 #define UCI_MSG_ANDROID_TIMESTAMP_ANCHOR_TO_UWBS_CMD_OFFSET_SYSTEM  4
+#define UCI_MSG_ANDROID_TIMESTAMP_ANCHOR_TO_UWBS_CMD_OFFSET_BLE 12
+#define UCI_MSG_ANDROID_TIMESTAMP_ANCHOR_TO_UWBS_RSP_LEN  17  // header 4 + status 1 + uwbs-time 8 + uncertainty 4
+#define UCI_MSG_ANDROID_TIMESTAMP_ANCHOR_TO_UWBS_RSP_OFFSET_STATUS 4
 
 /**********************************************
  * UWB Prop Group Opcode-E Opcodes
