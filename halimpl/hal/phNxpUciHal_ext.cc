@@ -42,6 +42,7 @@
 #define MAX_COMMAND_RETRY_COUNT           5
 #define HAL_EXTNS_WRITE_RSP_TIMEOUT_MS    100
 #define HAL_HW_RESET_NTF_TIMEOUT          10000 /* 10 sec wait */
+#define HAL_EXTNS_WRITE_RSP_TIMEOUT_DELTA_MS 10
 
 /******************* Global variables *****************************************/
 extern phNxpUciHal_Control_t nxpucihal_ctrl;
@@ -105,14 +106,15 @@ tHAL_UWB_STATUS phNxpUciHal_process_ext_cmd_rsp(size_t cmd_len,
     }
 
     // Wait for rsp
-    status = nxpucihal_ctrl.cmdrsp.Wait(HAL_EXTNS_WRITE_RSP_TIMEOUT_MS);
+    status = nxpucihal_ctrl.cmdrsp.Wait(
+      HAL_EXTNS_WRITE_RSP_TIMEOUT_MS +
+      nr_retries * HAL_EXTNS_WRITE_RSP_TIMEOUT_DELTA_MS
+    );
 
     if (status == UWBSTATUS_RESPONSE_TIMEOUT) {
       nr_timedout++;
       nr_retries++;
     } else if (status == UWBSTATUS_COMMAND_RETRANSMIT) {
-      // TODO: Do not retransmit CMD by here when !nxpucihal_ctrl.hal_ext_enabled,
-      // Upper layer should take care of it.
       nr_retries++;
     } else {
       break;
