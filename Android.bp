@@ -68,7 +68,6 @@ cc_library_shared {
         "liblog",
         "libhardware",
         "libbase",
-        "libchrome",
         "libutils",
         "libdl",
         "libhidlbase",
