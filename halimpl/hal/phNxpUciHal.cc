@@ -305,7 +305,12 @@ static bool phNxpUciHal_hook_cmd(size_t cmdlen, const uint8_t* cmd)
     // TODO: remove this out.
     if (cmd[UCI_MSG_HDR_SIZE + 1] == VENDOR_CALIB_PARAM_TX_POWER_PER_ANTENNA) {
       phNxpUciHal_handle_set_calibration(cmd, cmdlen);
-      return true;
+      /* Return False here. This command could be initiated from AKASH
+       * Or from upper layer.
+       * If this is called from AKASH, if we return false, no one would return
+       * the Command Status, and the AKASH script would get blocked.
+       */
+      return false;
     }
   } else if (gid == UCI_GID_SESSION_MANAGE && oid == UCI_MSG_SESSION_SET_APP_CONFIG) {
     return phNxpUciHal_handle_set_app_config(cmdlen, cmd);
