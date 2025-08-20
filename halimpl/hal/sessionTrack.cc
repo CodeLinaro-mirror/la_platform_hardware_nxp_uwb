@@ -280,7 +280,7 @@ public:
     std::vector<uint32_t> blocked_session_handles;
     {
       std::lock_guard<std::mutex> lock(sessions_lock_);
-      for (const auto elem : sessions_) {
+      for (const auto& elem : sessions_) {
         auto session_handle = elem.first;
         auto pSessionInfo = elem.second;
 
