@@ -361,9 +361,16 @@ public:
     if (!ccc_inject_uwb_init_time_enabled_)
       return;
 
-    // Upper-layer specified the UWB_TIME_0.
-    if (pSessionInfo->config.uwb_init_time.has_value())
+    // Patches UWB_INITIATION_TIME only for CCC session.
+    if (pSessionInfo->session_type_ != kSessionType_CCCRanging)
       return;
+
+    // Upper-layer specified the UWB_TIME_0.
+    if (pSessionInfo->config.get_uwb_init_time() != 0) {
+      NXPLOG_UCIHAL_D("This session already has non-zero UWB_TIME_0 %" PRIu64,
+        pSessionInfo->config.get_uwb_init_time());
+      return;
+    }
 
     uint64_t system_time_0 = GetSystemTime();
 
@@ -400,10 +407,11 @@ public:
     }
 
     NXPLOG_UCIHAL_D("SessionTrack: session start, handle=0x%x "
-      "channel=%u max_rr=%d max_meas=%d",
+      "channel=%u max_rr=%d max_meas=%d init_time=%" PRIu64,
       session_handle, pSessionInfo->config.get_channel(),
       pSessionInfo->config.get_max_rr_retry(),
-      pSessionInfo->config.get_max_measurements());
+      pSessionInfo->config.get_max_measurements(),
+      pSessionInfo->config.get_uwb_init_time());
 
     pSessionInfo->deinit_delayed_ = false;
 
