@@ -995,7 +995,6 @@ private:
   std::shared_ptr<SessionInfo> AddNewSession(uint32_t session_handle,
                                              uint32_t session_id,
                                              uint8_t session_type) {
-    NXPLOG_UCIHAL_D("SessionTrack: add session handle 0x%08x", session_handle);
     std::lock_guard<std::mutex> lock(sessions_lock_);
 
     bool was_idle = IsDeviceIdle();
@@ -1003,6 +1002,9 @@ private:
     std::shared_ptr<SessionInfo> info =
       std::make_shared<SessionInfo>(session_id, session_handle, session_type);
     sessions_.emplace(std::make_pair(session_handle, info));
+
+    NXPLOG_UCIHAL_D("SessionTrack: added session 0x%08x/0x%08x (%zu sessions)",
+      session_id, session_handle, sessions_.size());
 
     if (was_idle) {
       NXPLOG_UCIHAL_D("Queue Active");
@@ -1014,11 +1016,18 @@ private:
   // Removes a session and transition to IDLE when it's IDLE.
   // Called by SessionStatusNtf::DEINIT
   void RemoveSession(uint32_t session_handle) {
-    NXPLOG_UCIHAL_D("SessionTrack: remove session handle 0x%08x", session_handle);
-
     std::lock_guard<std::mutex> lock(sessions_lock_);
 
-    sessions_.erase(session_handle);
+    auto it = sessions_.find(session_handle);
+    if (it == sessions_.end()) {
+      NXPLOG_UCIHAL_W("Unregistered session handle 0x%x in removing.", session_handle);
+    } else {
+      std::shared_ptr<SessionInfo> info = it->second;
+      uint32_t session_id = info->session_id_;
+      sessions_.erase(session_handle);
+      NXPLOG_UCIHAL_D("SessionTrack: removed session 0x%08x/0x%08x (%zu sessions)",
+        session_id, session_handle, sessions_.size());
+    }
 
     if (IsDeviceIdle()) {
       NXPLOG_UCIHAL_D("Queue Idle");
@@ -1031,7 +1040,7 @@ private:
 
     auto it = sessions_.find(session_handle);
     if (it == sessions_.end()) {
-      NXPLOG_UCIHAL_E("SessionTrack: Session 0x%08x not registered", session_handle);
+      NXPLOG_UCIHAL_E("SessionTrack: Session handle 0x%08x not registered", session_handle);
       return nullptr;
     }
     return it->second;
