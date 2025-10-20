@@ -280,7 +280,7 @@ public:
     std::vector<uint32_t> blocked_session_handles;
     {
       std::lock_guard<std::mutex> lock(sessions_lock_);
-      for (const auto elem : sessions_) {
+      for (const auto& elem : sessions_) {
         auto session_handle = elem.first;
         auto pSessionInfo = elem.second;
 
@@ -361,9 +361,16 @@ public:
     if (!ccc_inject_uwb_init_time_enabled_)
       return;
 
-    // Upper-layer specified the UWB_TIME_0.
-    if (pSessionInfo->config.uwb_init_time.has_value())
+    // Patches UWB_INITIATION_TIME only for CCC session.
+    if (pSessionInfo->session_type_ != kSessionType_CCCRanging)
       return;
+
+    // Upper-layer specified the UWB_TIME_0.
+    if (pSessionInfo->config.get_uwb_init_time() != 0) {
+      NXPLOG_UCIHAL_D("This session already has non-zero UWB_TIME_0 %" PRIu64,
+        pSessionInfo->config.get_uwb_init_time());
+      return;
+    }
 
     uint64_t system_time_0 = GetSystemTime();
 
@@ -400,10 +407,11 @@ public:
     }
 
     NXPLOG_UCIHAL_D("SessionTrack: session start, handle=0x%x "
-      "channel=%u max_rr=%d max_meas=%d",
+      "channel=%u max_rr=%d max_meas=%d init_time=%" PRIu64,
       session_handle, pSessionInfo->config.get_channel(),
       pSessionInfo->config.get_max_rr_retry(),
-      pSessionInfo->config.get_max_measurements());
+      pSessionInfo->config.get_max_measurements(),
+      pSessionInfo->config.get_uwb_init_time());
 
     pSessionInfo->deinit_delayed_ = false;
 
@@ -987,7 +995,6 @@ private:
   std::shared_ptr<SessionInfo> AddNewSession(uint32_t session_handle,
                                              uint32_t session_id,
                                              uint8_t session_type) {
-    NXPLOG_UCIHAL_D("SessionTrack: add session handle 0x%08x", session_handle);
     std::lock_guard<std::mutex> lock(sessions_lock_);
 
     bool was_idle = IsDeviceIdle();
@@ -995,6 +1002,9 @@ private:
     std::shared_ptr<SessionInfo> info =
       std::make_shared<SessionInfo>(session_id, session_handle, session_type);
     sessions_.emplace(std::make_pair(session_handle, info));
+
+    NXPLOG_UCIHAL_D("SessionTrack: added session 0x%08x/0x%08x (%zu sessions)",
+      session_id, session_handle, sessions_.size());
 
     if (was_idle) {
       NXPLOG_UCIHAL_D("Queue Active");
@@ -1006,11 +1016,18 @@ private:
   // Removes a session and transition to IDLE when it's IDLE.
   // Called by SessionStatusNtf::DEINIT
   void RemoveSession(uint32_t session_handle) {
-    NXPLOG_UCIHAL_D("SessionTrack: remove session handle 0x%08x", session_handle);
-
     std::lock_guard<std::mutex> lock(sessions_lock_);
 
-    sessions_.erase(session_handle);
+    auto it = sessions_.find(session_handle);
+    if (it == sessions_.end()) {
+      NXPLOG_UCIHAL_W("Unregistered session handle 0x%x in removing.", session_handle);
+    } else {
+      std::shared_ptr<SessionInfo> info = it->second;
+      uint32_t session_id = info->session_id_;
+      sessions_.erase(session_handle);
+      NXPLOG_UCIHAL_D("SessionTrack: removed session 0x%08x/0x%08x (%zu sessions)",
+        session_id, session_handle, sessions_.size());
+    }
 
     if (IsDeviceIdle()) {
       NXPLOG_UCIHAL_D("Queue Idle");
@@ -1023,7 +1040,7 @@ private:
 
     auto it = sessions_.find(session_handle);
     if (it == sessions_.end()) {
-      NXPLOG_UCIHAL_E("SessionTrack: Session 0x%08x not registered", session_handle);
+      NXPLOG_UCIHAL_E("SessionTrack: Session handle 0x%08x not registered", session_handle);
       return nullptr;
     }
     return it->second;
