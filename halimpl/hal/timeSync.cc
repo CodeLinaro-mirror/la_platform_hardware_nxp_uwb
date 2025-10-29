@@ -248,8 +248,10 @@ UwbTimestamp ConvertTimestamp(const uint64_t system_time_base,
     return UwbTimestamp { UCI_STATUS_FAILED };
   }
 
+  uint64_t uwbs_time_us = uwbs_time.value();
+
   NXPLOG_UCIHAL_E("TimeSync: UWBS timestamp=%" PRIu64 ", elapsed=%" PRIu64,
-    uwbs_time.value(), elapsed_time);
+    uwbs_time_us, elapsed_time);
 
   if (system_time_base != 0) {
     // given system time should be monotonic, or zero.
@@ -268,11 +270,14 @@ UwbTimestamp ConvertTimestamp(const uint64_t system_time_base,
     return UwbTimestamp { UCI_STATUS_FAILED };
   }
 
-  uint64_t uwbs_time_us = uwbs_time.value();
+  // Applies the elapsed time in this function.
+  uwbs_time_us -= (elapsed_time / 2);
+
+  // Applies the elapsed time before this function.
   if (system_time_base != 0) {
-    // Applies the elapsed time in querying UWBS timestamp.
-    uwbs_time_us += (system_time_0 + elapsed_time / 2) - system_time_base;
+    uwbs_time_us -= (system_time_0 - system_time_base);
   }
+
   uint32_t uncertainty_us = elapsed_time + kExtraUncertaintyInConvertUs;
 
   UwbTimestamp timestamp { system_time_base, uwbs_time_us, uncertainty_us };
