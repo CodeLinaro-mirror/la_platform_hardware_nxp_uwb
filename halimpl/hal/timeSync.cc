@@ -278,7 +278,7 @@ UwbTimestamp ConvertTimestamp(const uint64_t system_time_base,
     uwbs_time_us -= (system_time_0 - system_time_base);
   }
 
-  uint32_t uncertainty_us = elapsed_time + kExtraUncertaintyInConvertUs;
+  uint32_t uncertainty_us = (elapsed_time + 1) / 2 + kExtraUncertaintyInConvertUs;
 
   UwbTimestamp timestamp { system_time_base, uwbs_time_us, uncertainty_us };
 
