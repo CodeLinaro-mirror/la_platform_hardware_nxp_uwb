@@ -229,38 +229,67 @@ class AsyncTimestamp {
 
 std::unique_ptr<AsyncTimestamp> async_timestamp;
 
+struct UwbTimeQueryResult {
+  uint64_t system_time_0;
+  uint64_t system_time_1;
+  uint64_t uwbs_time;
+};
+
+std::optional<UwbTimeQueryResult> PickUwbsTimeStamp() {
+  constexpr int kSamples = 3;
+  uint64_t min_elapsed_time = std::numeric_limits<uint64_t>::max();
+  std::optional<UwbTimeQueryResult> result;
+
+  for (int i = 0; i < kSamples; i++) {
+    uint64_t system_time_0 = GetSystemTime();
+    std::optional<uint64_t> uwbs_time = GetUwbsTimeStamp();
+    uint64_t system_time_1 = GetSystemTime();
+    uint64_t elapsed_time = system_time_1 - system_time_0;
+
+    if (!uwbs_time.has_value()) {
+      continue;
+    }
+
+    NXPLOG_UCIHAL_D("TimeSync: Sampled timestamps %" PRIu64 ", elapsed=%" PRIu64,
+      uwbs_time.value(), elapsed_time);
+
+    if (elapsed_time < min_elapsed_time) {
+      result = UwbTimeQueryResult {system_time_0, system_time_1, uwbs_time.value()};
+      min_elapsed_time = elapsed_time;
+    }
+  }
+  return result;
+}
+
 // Converts given system time to the timestamp in UWBS time domain
 // by calculating the offset between system time and UWBS time.
 // ble_time_base is just for the debug logs.
 UwbTimestamp ConvertTimestamp(const uint64_t system_time_base,
                               const uint64_t ble_time_base)
 {
-  // All time values are monotonic / micro-seconds.
-  uint64_t system_time_0 = GetSystemTime();
-
-  std::optional<uint64_t> uwbs_time = GetUwbsTimeStamp();
-
-  uint64_t system_time_1 = GetSystemTime();
-
-  uint64_t elapsed_time = system_time_1 - system_time_0;
-
-  if (!uwbs_time.has_value()) {
-    return UwbTimestamp { UCI_STATUS_FAILED };
-  }
-
-  NXPLOG_UCIHAL_E("TimeSync: UWBS timestamp=%" PRIu64 ", elapsed=%" PRIu64,
-    uwbs_time.value(), elapsed_time);
-
+  const uint64_t system_time_init = GetSystemTime();
   if (system_time_base != 0) {
     // given system time should be monotonic, or zero.
-    if (system_time_0 < system_time_base ||
-        system_time_0 > (system_time_base + kSystemTimeMaxLatencyUs)) {
+    if (system_time_init < system_time_base ||
+        system_time_init > (system_time_base + kSystemTimeMaxLatencyUs)) {
       NXPLOG_UCIHAL_E("TimeSync: Given system time %" PRIu64 " is incompatible. "
-        "current system time=%" PRIu64 " - %" PRIu64,
-        system_time_base, system_time_0, system_time_1);
+        "current system time=%" PRIu64,
+        system_time_base, system_time_init);
       return UwbTimestamp { UCI_STATUS_INVALID_PARAM };
     }
   }
+
+  std::optional<UwbTimeQueryResult> result = PickUwbsTimeStamp();
+  if (!result.has_value()) {
+    return UwbTimestamp { UCI_STATUS_FAILED };
+  }
+  const uint64_t system_time_0 = result.value().system_time_0;
+  const uint64_t system_time_1 = result.value().system_time_1;
+  const uint64_t elapsed_time = system_time_1 - system_time_0;
+  const uint64_t uwbs_time_us = result.value().uwbs_time;
+
+  NXPLOG_UCIHAL_D("TimeSync: UWBS timestamp=%" PRIu64 ", elapsed=%" PRIu64,
+    uwbs_time_us, elapsed_time);
 
   if (elapsed_time > kUwbsTimeMaxLatencyUs) {
     NXPLOG_UCIHAL_E("TimeSync: took too long time to get uwbs timestamp %" PRIu64,
@@ -268,14 +297,17 @@ UwbTimestamp ConvertTimestamp(const uint64_t system_time_base,
     return UwbTimestamp { UCI_STATUS_FAILED };
   }
 
-  uint64_t uwbs_time_us = uwbs_time.value();
-  if (system_time_base != 0) {
-    // Applies the elapsed time in querying UWBS timestamp.
-    uwbs_time_us += (system_time_0 + elapsed_time / 2) - system_time_base;
-  }
-  uint32_t uncertainty_us = elapsed_time + kExtraUncertaintyInConvertUs;
+  // Applies the elapsed time in this function.
+  uint64_t uwbs_time_converted = uwbs_time_us - (system_time_0 + elapsed_time / 2 - system_time_init);
 
-  UwbTimestamp timestamp { system_time_base, uwbs_time_us, uncertainty_us };
+  // Applies the elapsed time before this function.
+  if (system_time_base != 0) {
+    uwbs_time_converted -= (system_time_init - system_time_base);
+  }
+
+  uint32_t uncertainty_us = (elapsed_time + 1) / 2 + kExtraUncertaintyInConvertUs;
+
+  UwbTimestamp timestamp { system_time_base, uwbs_time_converted, uncertainty_us };
 
   NXPLOG_UCIHAL_D("TimeSync: convert system-time %" PRIu64 ", ble-time %" PRIu64
     " --> uwbs-time %" PRIu64 ", uncertainty %" PRIu32,
