@@ -20,6 +20,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <functional>
 
 #include "phUwbCommon.h"
 #include "phMessageQueue.h"
